@@ -1,20 +1,14 @@
+pub mod ring;
+
 use std::sync::Mutex;
 
-use glam::{Mat4, Vec3};
+use glam::Vec3;
 use stardust_xr_fusion::{
-    client::Client,
-    drawable::{Line, LinePoint, Lines, LinesAspect},
-    fields::{Field, Shape},
-    input::InputHandler,
-    node::NodeResult,
-    root::{RootAspect, RootEvent},
-    spatial::Transform,
-    values::color::rgba_linear,
+    client::Client, core::schemas::zbus::Connection, drawable::{Line, LinePoint, Lines, LinesAspect}, fields::{Field, Shape}, input::InputHandler, node::NodeResult, root::{RootAspect, RootEvent}, spatial::Transform, values::color::rgba_linear
 };
-use stardust_xr_molecules::{
-    input_action::{InputQueueable, MultiAction},
-    lines::{self, LineExt},
-};
+use stardust_xr_molecules::input_action::{InputQueueable, MultiAction};
+
+use crate::ring::Ring;
 
 #[tokio::main]
 async fn main() -> NodeResult<()> {
@@ -26,19 +20,26 @@ async fn main() -> NodeResult<()> {
         InputHandler::create(client.get_root(), Transform::none(), &field)?.queue()?;
     let mut action = MultiAction::default();
     let lines = Lines::create(client.get_root(), Transform::none(), &[])?;
+    let conn = Connection::session().await.unwrap();
+    let mut ring = Ring::new(conn, &client)?;
 
     loop {
         event_loop.get_event_handle().wait().await;
         let Some(event) = client.get_root().recv_root_event() else {
             continue;
         };
-        match event {
-            RootEvent::Ping { response } => response.send_ok(()),
-            RootEvent::Frame { info: _ } => {}
+        let frame_info = match event {
+            RootEvent::Ping { response } => {
+                response.send_ok(());
+                continue;
+            }
+            RootEvent::Frame { info } => info,
             RootEvent::SaveState { response: _ } => {
                 break;
             }
-        }
+        };
+        ring.update(&frame_info);
+        
 
         let points: Mutex<Vec<[Vec3; 3]>> = Mutex::new(Vec::new());
         input_handler.handle_events();
