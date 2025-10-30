@@ -151,7 +151,7 @@ impl Ring {
             _ = method_ref.release(self.input.handler());
         }
     }
-    fn get_attached_input(&self) -> Option<Arc<InputData>> {
+    pub fn get_attached_input(&self) -> Option<Arc<InputData>> {
         self.attached_to
             .as_ref()
             .and_then(|attached| {

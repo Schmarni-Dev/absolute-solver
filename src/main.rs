@@ -4,7 +4,15 @@ use std::sync::Mutex;
 
 use glam::Vec3;
 use stardust_xr_fusion::{
-    client::Client, core::schemas::zbus::Connection, drawable::{Line, LinePoint, Lines, LinesAspect}, fields::{Field, Shape}, input::InputHandler, node::NodeResult, root::{RootAspect, RootEvent}, spatial::Transform, values::color::rgba_linear
+    client::Client,
+    core::schemas::zbus::Connection,
+    drawable::{Line, LinePoint, Lines, LinesAspect},
+    fields::{Field, Shape},
+    input::{InputDataType, InputHandler},
+    node::NodeResult,
+    root::{RootAspect, RootEvent},
+    spatial::Transform,
+    values::color::rgba_linear,
 };
 use stardust_xr_molecules::input_action::{InputQueueable, MultiAction};
 
@@ -15,10 +23,6 @@ async fn main() -> NodeResult<()> {
     let client = Client::connect().await.unwrap();
     let event_loop = client.async_event_loop();
     let client = event_loop.client_handle.clone();
-    let field = Field::create(client.get_root(), Transform::none(), Shape::Sphere(1.0))?;
-    let mut input_handler =
-        InputHandler::create(client.get_root(), Transform::none(), &field)?.queue()?;
-    let mut action = MultiAction::default();
     let lines = Lines::create(client.get_root(), Transform::none(), &[])?;
     let conn = Connection::session().await.unwrap();
     let mut ring = Ring::new(conn, &client)?;
@@ -39,31 +43,28 @@ async fn main() -> NodeResult<()> {
             }
         };
         ring.update(&frame_info);
-        
 
         let points: Mutex<Vec<[Vec3; 3]>> = Mutex::new(Vec::new());
-        input_handler.handle_events();
-        action.update(
-            &input_handler,
-            |_| true,
-            |v| match &v.input {
-                stardust_xr_fusion::input::InputDataType::Pointer(_) => false,
-                stardust_xr_fusion::input::InputDataType::Hand(hand) => {
-                    let mut points = points.lock().unwrap();
-                    let mut p = [
-                        hand.thumb.tip.position.into(),
-                        hand.index.tip.position.into(),
-                        hand.middle.tip.position.into(),
-                    ];
-                    if !hand.right {
-                        p.reverse();
-                    }
-                    points.push(p);
-                    false
+        let Some(input) = ring.get_attached_input() else {
+            lines.set_lines(&[]);
+            continue;
+        };
+        match &input.input {
+            InputDataType::Pointer(_) => {}
+            InputDataType::Hand(hand) => {
+                let mut points = points.lock().unwrap();
+                let mut p = [
+                    hand.thumb.tip.position.into(),
+                    hand.index.tip.position.into(),
+                    hand.middle.tip.position.into(),
+                ];
+                if !hand.right {
+                    p.reverse();
                 }
-                stardust_xr_fusion::input::InputDataType::Tip(_) => false,
-            },
-        );
+                points.push(p);
+            }
+            _ => {}
+        }
         let mut lines_data = Vec::new();
         for points in points.lock().unwrap().clone() {
             let [a, b, c] = points;
