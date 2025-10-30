@@ -23,7 +23,7 @@ pub struct Ring {
     grabbable: Grabbable,
     _grabbable_lines: Lines,
     _input_field: Field,
-    input: InputQueue,
+    pub input: InputQueue,
     attached_to: Option<InputMethodRef>,
     attach_lines: Lines,
 }

@@ -8,12 +8,13 @@ use stardust_xr_fusion::{
     core::schemas::zbus::Connection,
     drawable::{Line, LinePoint, Lines, LinesAspect, Model},
     input::InputDataType,
-    node::NodeResult,
+    node::{NodeResult, OwnedAspect},
     project_local_resources,
     root::{RootAspect, RootEvent},
     spatial::{SpatialAspect, Transform},
     values::{ResourceID, color::rgba_linear},
 };
+use stardust_xr_molecules::input_action::SimpleAction;
 
 use crate::ring::Ring;
 
@@ -28,6 +29,8 @@ async fn main() -> NodeResult<()> {
     let lines = Lines::create(client.get_root(), Transform::none(), &[])?;
     let conn = Connection::session().await.unwrap();
     let mut ring = Ring::new(conn, &client)?;
+
+    let mut solver_active = SimpleAction::default();
 
     let solver = Model::create(
         client.get_root(),
@@ -56,6 +59,26 @@ async fn main() -> NodeResult<()> {
             _ = lines.set_lines(&[]);
             continue;
         };
+        solver_active.update(&ring.input, &|data| match &data.input {
+            InputDataType::Pointer(_) => false,
+            InputDataType::Hand(hand) => {
+                let p: [Vec3; 3] = [
+                    hand.thumb.tip.position.into(),
+                    hand.index.tip.position.into(),
+                    hand.middle.tip.position.into(),
+                ];
+                let (center, _) = get_position_and_normal_from_triangle(p);
+                let max_distance_from_center = p
+                    .iter()
+                    .map(|point| point.distance(center))
+                    .reduce(|a, b| if a > b { a } else { b })
+                    .unwrap_or_default();
+
+                max_distance_from_center > 0.025
+            }
+            InputDataType::Tip(_) => data.datamap.with_data(|d| d.idx("grab").as_f32() > 0.5),
+        });
+
         let mut lines_data = Vec::new();
         let (triangle_center, rotation, diameter) = match &input.input {
             InputDataType::Tip(tip) => (tip.origin.into(), tip.orientation.into(), 0.005),
@@ -109,11 +132,17 @@ async fn main() -> NodeResult<()> {
             cyclic: false,
         });
         lines.set_lines(&lines_data)?;
-        solver.set_local_transform(Transform::from_translation_rotation_scale(
-            triangle_center,
-            rotation * Quat::from_rotation_x(FRAC_PI_2),
-            [diameter * 2.0; 3],
-        ))?;
+        // we can use this solver active with containing input to get when we start and stop expanding our fingers to be able to switch between selection and levitation
+        if solver_active.currently_acting().contains(&input) {
+            solver.set_enabled(true)?;
+            solver.set_local_transform(Transform::from_translation_rotation_scale(
+                triangle_center,
+                rotation * Quat::from_rotation_x(FRAC_PI_2),
+                [diameter * 2.0; 3],
+            ))?;
+        } else {
+            solver.set_enabled(false)?;
+        }
     }
     Ok(())
 }
