@@ -6,37 +6,60 @@ use glam::{Quat, Vec3};
 use stardust_xr_fusion::{
     client::Client,
     core::schemas::zbus::Connection,
-    drawable::{Line, LinePoint, Lines, LinesAspect, Model},
+    drawable::{Line, LinePoint, Lines, LinesAspect, MaterialParameter, Model, ModelPartAspect},
     input::InputDataType,
-    node::{NodeResult, OwnedAspect},
+    node::OwnedAspect,
     project_local_resources,
     root::{RootAspect, RootEvent},
     spatial::{SpatialAspect, Transform},
-    values::{ResourceID, color::rgba_linear},
+    values::{
+        ResourceID,
+        color::{Hsva, rgba_linear},
+    },
 };
-use stardust_xr_molecules::input_action::SimpleAction;
+use stardust_xr_molecules::{accent_color::AccentColor, input_action::SimpleAction};
 
 use crate::ring::Ring;
 
 #[tokio::main]
-async fn main() -> NodeResult<()> {
+async fn main() {
     let client = Client::connect().await.unwrap();
     client
         .setup_resources(&[&project_local_resources!("res")])
         .unwrap();
     let event_loop = client.async_event_loop();
     let client = event_loop.client_handle.clone();
-    let lines = Lines::create(client.get_root(), Transform::none(), &[])?;
+    let lines = Lines::create(client.get_root(), Transform::none(), &[]).unwrap();
     let conn = Connection::session().await.unwrap();
-    let mut ring = Ring::new(conn, &client)?;
+    let mut accent_color = AccentColor::new(conn.clone());
+    let mut ring = Ring::new(conn, &client).unwrap();
 
     let mut solver_active = SimpleAction::default();
-
-    let solver = Model::create(
+    let solver_model = Model::create(
         client.get_root(),
         Transform::identity(),
         &ResourceID::new_namespaced("absolute_solver", "solver"),
-    )?;
+    )
+    .unwrap();
+
+    // change solver color to match accent color
+    let solver_part = solver_model.part("Solver").unwrap();
+    tokio::task::spawn(async move {
+        while accent_color.color.changed().await.is_ok() {
+            let mut color = accent_color.color();
+
+            // bad hack so we can get a max value color
+            let greatest_channel = color.c.r.max(color.c.g).max(color.c.b);
+            let factor = 1.0 / greatest_channel;
+            color.c.r *= factor;
+            color.c.g *= factor;
+            color.c.b *= factor;
+
+            solver_part
+                .set_material_parameter("emission_factor", MaterialParameter::Color(color))
+                .unwrap();
+        }
+    });
 
     loop {
         event_loop.get_event_handle().wait().await;
@@ -81,7 +104,7 @@ async fn main() -> NodeResult<()> {
 
         let mut lines_data = Vec::new();
         let (triangle_center, rotation, diameter) = match &input.input {
-            InputDataType::Tip(tip) => (tip.origin.into(), tip.orientation.into(), 0.005),
+            InputDataType::Tip(tip) => (tip.origin.into(), tip.orientation.into(), 0.1),
             InputDataType::Hand(hand) => {
                 let mut p: [Vec3; 3] = [
                     hand.thumb.tip.position.into(),
@@ -131,20 +154,21 @@ async fn main() -> NodeResult<()> {
             ],
             cyclic: false,
         });
-        lines.set_lines(&lines_data)?;
+        lines.set_lines(&lines_data).unwrap();
         // we can use this solver active with containing input to get when we start and stop expanding our fingers to be able to switch between selection and levitation
         if solver_active.currently_acting().contains(&input) {
-            solver.set_enabled(true)?;
-            solver.set_local_transform(Transform::from_translation_rotation_scale(
-                triangle_center,
-                rotation * Quat::from_rotation_x(FRAC_PI_2),
-                [diameter * 2.0; 3],
-            ))?;
+            solver_model.set_enabled(true).unwrap();
+            solver_model
+                .set_local_transform(Transform::from_translation_rotation_scale(
+                    triangle_center,
+                    rotation * Quat::from_rotation_x(FRAC_PI_2),
+                    [diameter * 2.0; 3],
+                ))
+                .unwrap();
         } else {
-            solver.set_enabled(false)?;
+            solver_model.set_enabled(false).unwrap();
         }
     }
-    Ok(())
 }
 
 fn get_position_and_normal_from_triangle(points: [Vec3; 3]) -> (Vec3, Quat) {
