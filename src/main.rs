@@ -1,20 +1,16 @@
 pub mod ring;
 
-use std::sync::Mutex;
-
-use glam::Vec3;
+use glam::{Quat, Vec3};
 use stardust_xr_fusion::{
     client::Client,
     core::schemas::zbus::Connection,
     drawable::{Line, LinePoint, Lines, LinesAspect},
-    fields::{Field, Shape},
-    input::{InputDataType, InputHandler},
+    input::InputDataType,
     node::NodeResult,
     root::{RootAspect, RootEvent},
     spatial::Transform,
     values::color::rgba_linear,
 };
-use stardust_xr_molecules::input_action::{InputQueueable, MultiAction};
 
 use crate::ring::Ring;
 
@@ -44,16 +40,15 @@ async fn main() -> NodeResult<()> {
         };
         ring.update(&frame_info);
 
-        let points: Mutex<Vec<[Vec3; 3]>> = Mutex::new(Vec::new());
         let Some(input) = ring.get_attached_input() else {
-            lines.set_lines(&[]);
+            _ = lines.set_lines(&[]);
             continue;
         };
-        match &input.input {
-            InputDataType::Pointer(_) => {}
+        let mut lines_data = Vec::new();
+        let (point, rotation) = match &input.input {
+            InputDataType::Tip(tip) => (tip.origin.into(), tip.orientation.into()),
             InputDataType::Hand(hand) => {
-                let mut points = points.lock().unwrap();
-                let mut p = [
+                let mut p: [Vec3; 3] = [
                     hand.thumb.tip.position.into(),
                     hand.index.tip.position.into(),
                     hand.middle.tip.position.into(),
@@ -61,53 +56,58 @@ async fn main() -> NodeResult<()> {
                 if !hand.right {
                     p.reverse();
                 }
-                points.push(p);
+                lines_data.push(Line {
+                    points: p
+                        .iter()
+                        .copied()
+                        .map(|p| LinePoint {
+                            point: p.into(),
+                            thickness: 0.001,
+                            color: rgba_linear!(1.0, 0.0, 1.0, 1.0),
+                        })
+                        .collect(),
+                    cyclic: true,
+                });
+                get_position_and_normal_from_triangle(p)
             }
-            _ => {}
-        }
-        let mut lines_data = Vec::new();
-        for points in points.lock().unwrap().clone() {
-            let [a, b, c] = points;
-            let ab = a.distance_squared(b);
-            let bc = b.distance_squared(c);
-            let ca = c.distance_squared(a);
-            let point_a = ((bc * a) + (ca * b) + (ab * c)) / (ab + bc + ca);
-            let a_dist = a.distance_squared(point_a);
-            let b_dist = b.distance_squared(point_a);
-            let c_dist = c.distance_squared(point_a);
-            let point = ((a_dist * a) + (b_dist * b) + (c_dist * c)) / (a_dist + b_dist + c_dist);
-            let point = point.lerp(point_a, 0.5);
-            lines_data.push(Line {
-                points: points
-                    .into_iter()
-                    .map(|p| LinePoint {
-                        point: p.into(),
-                        thickness: 0.001,
-                        color: rgba_linear!(1.0, 0.0, 1.0, 1.0),
-                    })
-                    .collect(),
-                cyclic: true,
-            });
-            let ab = b - a;
-            let ac = c - a;
-            let normal = ab.cross(ac).normalize();
-            lines_data.push(Line {
-                points: vec![
-                    LinePoint {
-                        point: point.into(),
-                        thickness: 0.001,
-                        color: rgba_linear!(0.0, 1.0, 0.0, 1.0),
-                    },
-                    LinePoint {
-                        point: (point + (normal * 0.01)).into(),
-                        thickness: 0.001,
-                        color: rgba_linear!(0.0, 1.0, 0.0, 1.0),
-                    },
-                ],
-                cyclic: false,
-            });
-        }
+            _ => {
+                continue;
+            }
+        };
+        let normal = rotation * Vec3::NEG_Z;
+        lines_data.push(Line {
+            points: vec![
+                LinePoint {
+                    point: point.into(),
+                    thickness: 0.001,
+                    color: rgba_linear!(0.0, 1.0, 0.0, 1.0),
+                },
+                LinePoint {
+                    point: (point + (normal * 0.01)).into(),
+                    thickness: 0.001,
+                    color: rgba_linear!(0.0, 1.0, 0.0, 1.0),
+                },
+            ],
+            cyclic: false,
+        });
         lines.set_lines(&lines_data)?;
     }
     Ok(())
+}
+
+fn get_position_and_normal_from_triangle(points: [Vec3; 3]) -> (Vec3, Quat) {
+    let [a, b, c] = points;
+    let ab = a.distance_squared(b);
+    let bc = b.distance_squared(c);
+    let ca = c.distance_squared(a);
+    let point_a = ((bc * a) + (ca * b) + (ab * c)) / (ab + bc + ca);
+    let a_dist = a.distance_squared(point_a);
+    let b_dist = b.distance_squared(point_a);
+    let c_dist = c.distance_squared(point_a);
+    let point = ((a_dist * a) + (b_dist * b) + (c_dist * c)) / (a_dist + b_dist + c_dist);
+    let point = point.lerp(point_a, 0.5);
+    let ab = b - a;
+    let ac = c - a;
+    let normal = ab.cross(ac).normalize();
+    (point, Quat::from_rotation_arc(Vec3::NEG_Z, normal))
 }
