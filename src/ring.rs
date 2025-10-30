@@ -1,5 +1,5 @@
 use core::f32;
-use std::sync::Arc;
+use std::{f32::consts::FRAC_PI_2, sync::Arc};
 
 use glam::{Quat, Vec3, Vec3A};
 use stardust_xr_fusion::{
@@ -134,9 +134,10 @@ impl Ring {
                     let quat = Quat::from(tip.orientation);
                     (Vec3::from(tip.origin) + quat.mul_vec3(Vec3::Z * 0.05), quat)
                 }
-                InputDataType::Hand(hand) => {
-                    (hand.wrist.position.into(), hand.wrist.rotation.into())
-                }
+                InputDataType::Hand(hand) => (
+                    hand.palm.position.into(),
+                    Quat::from(hand.palm.rotation) * Quat::from_rotation_x(FRAC_PI_2),
+                ),
             };
             self.grabbable.set_pose(pos, rot);
         }
@@ -172,7 +173,7 @@ impl Ring {
                     let quat = Quat::from(tip.orientation);
                     pos.distance(Vec3A::from(tip.origin) + quat.mul_vec3a(Vec3A::Z * 0.05)) < 0.05
                 }
-                InputDataType::Hand(hand) => pos.distance(hand.wrist.position.into()) < 0.05,
+                InputDataType::Hand(hand) => pos.distance(hand.palm.position.into()) < 0.05,
             })
             .reduce(|a, b| if a.0.distance < b.0.distance { a } else { b })
     }

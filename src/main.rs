@@ -1,15 +1,18 @@
 pub mod ring;
 
+use std::f32::consts::FRAC_PI_2;
+
 use glam::{Quat, Vec3};
 use stardust_xr_fusion::{
     client::Client,
     core::schemas::zbus::Connection,
-    drawable::{Line, LinePoint, Lines, LinesAspect},
+    drawable::{Line, LinePoint, Lines, LinesAspect, Model},
     input::InputDataType,
     node::NodeResult,
+    project_local_resources,
     root::{RootAspect, RootEvent},
-    spatial::Transform,
-    values::color::rgba_linear,
+    spatial::{SpatialAspect, Transform},
+    values::{ResourceID, color::rgba_linear},
 };
 
 use crate::ring::Ring;
@@ -17,11 +20,20 @@ use crate::ring::Ring;
 #[tokio::main]
 async fn main() -> NodeResult<()> {
     let client = Client::connect().await.unwrap();
+    client
+        .setup_resources(&[&project_local_resources!("res")])
+        .unwrap();
     let event_loop = client.async_event_loop();
     let client = event_loop.client_handle.clone();
     let lines = Lines::create(client.get_root(), Transform::none(), &[])?;
     let conn = Connection::session().await.unwrap();
     let mut ring = Ring::new(conn, &client)?;
+
+    let solver = Model::create(
+        client.get_root(),
+        Transform::identity(),
+        &ResourceID::new_namespaced("absolute_solver", "solver"),
+    )?;
 
     loop {
         event_loop.get_event_handle().wait().await;
@@ -45,8 +57,8 @@ async fn main() -> NodeResult<()> {
             continue;
         };
         let mut lines_data = Vec::new();
-        let (point, rotation) = match &input.input {
-            InputDataType::Tip(tip) => (tip.origin.into(), tip.orientation.into()),
+        let (triangle_center, rotation, diameter) = match &input.input {
+            InputDataType::Tip(tip) => (tip.origin.into(), tip.orientation.into(), 0.005),
             InputDataType::Hand(hand) => {
                 let mut p: [Vec3; 3] = [
                     hand.thumb.tip.position.into(),
@@ -68,7 +80,13 @@ async fn main() -> NodeResult<()> {
                         .collect(),
                     cyclic: true,
                 });
-                get_position_and_normal_from_triangle(p)
+                let (position, rotation) = get_position_and_normal_from_triangle(p);
+                let max_distance_from_center = p
+                    .iter()
+                    .map(|point| point.distance(position))
+                    .reduce(|a, b| if a > b { a } else { b })
+                    .unwrap_or_default();
+                (position, rotation, max_distance_from_center * 2.0)
             }
             _ => {
                 continue;
@@ -78,12 +96,12 @@ async fn main() -> NodeResult<()> {
         lines_data.push(Line {
             points: vec![
                 LinePoint {
-                    point: point.into(),
+                    point: triangle_center.into(),
                     thickness: 0.001,
                     color: rgba_linear!(0.0, 1.0, 0.0, 1.0),
                 },
                 LinePoint {
-                    point: (point + (normal * 0.01)).into(),
+                    point: (triangle_center + (normal * 0.01)).into(),
                     thickness: 0.001,
                     color: rgba_linear!(0.0, 1.0, 0.0, 1.0),
                 },
@@ -91,6 +109,11 @@ async fn main() -> NodeResult<()> {
             cyclic: false,
         });
         lines.set_lines(&lines_data)?;
+        solver.set_local_transform(Transform::from_translation_rotation_scale(
+            triangle_center,
+            rotation * Quat::from_rotation_x(FRAC_PI_2),
+            [diameter * 2.0; 3],
+        ))?;
     }
     Ok(())
 }
