@@ -1,4 +1,5 @@
 pub mod ring;
+pub mod selection;
 
 use std::f32::consts::FRAC_PI_2;
 
@@ -9,6 +10,7 @@ use stardust_xr_fusion::{
     drawable::{Line, LinePoint, Lines, LinesAspect, MaterialParameter, Model, ModelPartAspect},
     input::InputDataType,
     node::OwnedAspect,
+    objects::object_registry::ObjectRegistry,
     project_local_resources,
     root::{RootAspect, RootEvent},
     spatial::{SpatialAspect, Transform},
@@ -16,10 +18,14 @@ use stardust_xr_fusion::{
 };
 use stardust_xr_molecules::{accent_color::AccentColor, input_action::SimpleAction};
 
-use crate::ring::Ring;
+use crate::{
+    ring::Ring,
+    selection::{Ray, Selector},
+};
 
 #[tokio::main]
 async fn main() {
+    tracing_subscriber::fmt().init();
     let client = Client::connect().await.unwrap();
     client
         .setup_resources(&[&project_local_resources!("res")])
@@ -28,8 +34,10 @@ async fn main() {
     let client = event_loop.client_handle.clone();
     let lines = Lines::create(client.get_root(), Transform::none(), &[]).unwrap();
     let conn = Connection::session().await.unwrap();
+    let obj_reg = ObjectRegistry::new(&conn).await;
     let mut accent_color = AccentColor::new(conn.clone());
     let mut ring = Ring::new(conn, &client).unwrap();
+    let mut selector = Selector::new(client.clone(), obj_reg).await.unwrap();
 
     let mut solver_active = SimpleAction::default();
     let solver_model = Model::create(
@@ -77,6 +85,7 @@ async fn main() {
 
         let Some(input) = ring.get_attached_input() else {
             _ = lines.set_lines(&[]);
+            _ = solver_model.set_enabled(false);
             continue;
         };
         solver_active.update(&ring.input, &|data| match &data.input {
@@ -101,8 +110,13 @@ async fn main() {
         });
 
         let mut lines_data = Vec::new();
-        let (triangle_center, rotation, diameter) = match &input.input {
-            InputDataType::Tip(tip) => (tip.origin.into(), tip.orientation.into(), 0.1),
+        let (triangle_center, rotation, diameter, selection_dir) = match &input.input {
+            InputDataType::Tip(tip) => (
+                tip.origin.into(),
+                tip.orientation.into(),
+                0.1,
+                Quat::from(tip.orientation) * Vec3::NEG_Z,
+            ),
             InputDataType::Hand(hand) => {
                 let mut p: [Vec3; 3] = [
                     hand.thumb.tip.position.into(),
@@ -131,7 +145,13 @@ async fn main() {
                     .map(|point| point.distance(position))
                     .reduce(|a, b| if a > b { a } else { b })
                     .unwrap_or_default();
-                (position, rotation, max_distance_from_center * 2.0)
+                let palm = Vec3::from(hand.palm.position);
+                (
+                    position,
+                    rotation,
+                    max_distance_from_center * 2.0,
+                    (position - palm).normalize(),
+                )
             }
             _ => {
                 continue;
@@ -153,6 +173,21 @@ async fn main() {
             ],
             cyclic: false,
         });
+        lines_data.push(Line {
+            points: vec![
+                LinePoint {
+                    point: triangle_center.into(),
+                    thickness: 0.001,
+                    color: rgba_linear!(0.0, 0.0, 1.0, 1.0),
+                },
+                LinePoint {
+                    point: (triangle_center + (selection_dir * 0.01)).into(),
+                    thickness: 0.001,
+                    color: rgba_linear!(0.0, 0.0, 1.0, 1.0),
+                },
+            ],
+            cyclic: false,
+        });
         lines.set_lines(&lines_data).unwrap();
         // we can use this solver active with containing input to get when we start and stop expanding our fingers to be able to switch between selection and levitation
         if solver_active.currently_acting().contains(&input) {
@@ -166,6 +201,16 @@ async fn main() {
                 .unwrap();
         } else {
             solver_model.set_enabled(false).unwrap();
+            selector
+                .find_selection(
+                    false,
+                    Ray {
+                        origin: triangle_center,
+                        direction: selection_dir,
+                        ref_space: ring.input.handler().clone().as_spatial_ref(),
+                    },
+                )
+                .await;
         }
     }
 }
