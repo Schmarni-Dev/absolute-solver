@@ -12,10 +12,7 @@ use stardust_xr_fusion::{
     project_local_resources,
     root::{RootAspect, RootEvent},
     spatial::{SpatialAspect, Transform},
-    values::{
-        ResourceID,
-        color::{Hsva, rgba_linear},
-    },
+    values::{ResourceID, color::rgba_linear},
 };
 use stardust_xr_molecules::{accent_color::AccentColor, input_action::SimpleAction};
 
@@ -90,7 +87,8 @@ async fn main() {
                     hand.index.tip.position.into(),
                     hand.middle.tip.position.into(),
                 ];
-                let (center, _) = get_position_and_normal_from_triangle(p);
+                let (center, _) =
+                    get_position_and_normal_from_triangle(p, hand.palm.rotation.into());
                 let max_distance_from_center = p
                     .iter()
                     .map(|point| point.distance(center))
@@ -126,7 +124,8 @@ async fn main() {
                         .collect(),
                     cyclic: true,
                 });
-                let (position, rotation) = get_position_and_normal_from_triangle(p);
+                let (position, rotation) =
+                    get_position_and_normal_from_triangle(p, hand.palm.rotation.into());
                 let max_distance_from_center = p
                     .iter()
                     .map(|point| point.distance(position))
@@ -171,7 +170,7 @@ async fn main() {
     }
 }
 
-fn get_position_and_normal_from_triangle(points: [Vec3; 3]) -> (Vec3, Quat) {
+fn get_position_and_normal_from_triangle(points: [Vec3; 3], ref_quat: Quat) -> (Vec3, Quat) {
     let [a, b, c] = points;
     let ab = a.distance_squared(b);
     let bc = b.distance_squared(c);
@@ -185,5 +184,8 @@ fn get_position_and_normal_from_triangle(points: [Vec3; 3]) -> (Vec3, Quat) {
     let ab = b - a;
     let ac = c - a;
     let normal = ab.cross(ac).normalize();
-    (point, Quat::from_rotation_arc(Vec3::NEG_Z, normal))
+    (
+        point,
+        ref_quat * Quat::from_rotation_arc(Vec3::NEG_Z, ref_quat.inverse() * normal),
+    )
 }

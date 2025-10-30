@@ -102,7 +102,7 @@ impl Ring {
                     let quat = Quat::from(tip.orientation);
                     Vec3::from(tip.origin) + quat.mul_vec3(Vec3::Z * 0.05)
                 }
-                InputDataType::Hand(hand) => Vec3::from(hand.wrist.position),
+                InputDataType::Hand(hand) => Vec3::from(hand.palm.position),
             };
             _ = self.attach_lines.set_lines(&[Line {
                 points: vec![
