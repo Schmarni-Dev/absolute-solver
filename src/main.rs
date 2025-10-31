@@ -20,7 +20,7 @@ use stardust_xr_molecules::{accent_color::AccentColor, input_action::SimpleActio
 
 use crate::{
     ring::Ring,
-    selection::{Ray, Selector},
+    selection::{CapturedSelection, Ray, Selector},
 };
 
 #[tokio::main]
@@ -38,6 +38,8 @@ async fn main() {
     let mut accent_color = AccentColor::new(conn.clone());
     let mut ring = Ring::new(conn, &client).unwrap();
     let mut selector = Selector::new(client.clone(), obj_reg).await.unwrap();
+
+    let mut captured_selection: Option<CapturedSelection> = None;
 
     let mut solver_active = SimpleAction::default();
     let solver_model = Model::create(
@@ -189,8 +191,21 @@ async fn main() {
             cyclic: false,
         });
         lines.set_lines(&lines_data).unwrap();
+
+        if solver_active.started_acting().contains(&input) {
+            captured_selection = selector.capture_selected().await;
+        }
         // we can use this solver active with containing input to get when we start and stop expanding our fingers to be able to switch between selection and levitation
         if solver_active.currently_acting().contains(&input) {
+            // TODO: replace with actual transform functionality
+            if let Some(sel) = captured_selection.as_ref() {
+                _ = sel
+                    .spatial()
+                    .set_local_transform(Transform::from_translation_rotation(
+                        triangle_center,
+                        rotation * Quat::from_rotation_x(FRAC_PI_2),
+                    ));
+            };
             solver_model.set_enabled(true).unwrap();
             solver_model
                 .set_local_transform(Transform::from_translation_rotation_scale(
@@ -200,16 +215,14 @@ async fn main() {
                 ))
                 .unwrap();
         } else {
+            captured_selection.take();
             solver_model.set_enabled(false).unwrap();
             selector
-                .find_selection(
-                    false,
-                    Ray {
-                        origin: triangle_center,
-                        direction: selection_dir,
-                        ref_space: ring.input.handler().clone().as_spatial_ref(),
-                    },
-                )
+                .update_selection(Ray {
+                    origin: triangle_center,
+                    direction: selection_dir,
+                    ref_space: ring.input.handler().clone().as_spatial_ref(),
+                })
                 .await;
         }
     }

@@ -6,13 +6,13 @@ use stardust_xr_fusion::{
     drawable::{Lines, LinesAspect},
     fields::{FieldRef, FieldRefAspect},
     list_query::{ListEvent, ObjectListQuery},
-    node::NodeResult,
+    node::{NodeResult, NodeType},
     objects::{
         interfaces::{ReparentLockProxy, ReparentableProxy},
         object_registry::ObjectRegistry,
     },
     query::ObjectQuery,
-    spatial::{SpatialAspect, SpatialRef, SpatialRefAspect, Transform},
+    spatial::{Spatial, SpatialAspect, SpatialRef, SpatialRefAspect, Transform},
 };
 use stardust_xr_molecules::{
     dbus::AbortOnDrop,
@@ -28,6 +28,12 @@ pub struct Selector {
         Option<FieldRef>,
     )>,
     selection_lines: Lines,
+    selection: Option<(
+        SpatialRef,
+        ReparentableProxy<'static>,
+        ReparentLockProxy<'static>,
+        Option<FieldRef>,
+    )>,
     _mapper_task: AbortOnDrop,
 }
 
@@ -57,9 +63,36 @@ impl Selector {
             query,
             _mapper_task: AbortOnDrop(mapper.abort_handle()),
             selection_lines,
+            selection: None,
         })
     }
-    pub async fn find_selection(&self, capture_selection: bool, ray: Ray) {
+    pub async fn capture_selected(&mut self) -> Option<CapturedSelection> {
+        let Some((spatial_ref, reparentable, reparent_lock, _)) = self.selection.take() else {
+            return None;
+        };
+        if let Err(_) = reparent_lock.lock().await {
+            return None;
+        }
+        let root = self.selection_lines.client().get_root();
+        let spatial = Spatial::create(root, Transform::none(), false).ok()?;
+        spatial.set_relative_transform(
+            &spatial_ref,
+            Transform {
+                translation: Some([0.; 3].into()),
+                rotation: Some(Quat::IDENTITY.into()),
+                scale: None,
+            },
+        );
+        _ = reparentable
+            .parent(spatial.export_spatial().await.ok()?)
+            .await;
+        Some(CapturedSelection {
+            spatial,
+            reparentable,
+            reparent_lock,
+        })
+    }
+    pub async fn update_selection(&mut self, ray: Ray) {
         let mut closest_target = None;
         for obj @ (spatial, _, _, field) in self.query.iter().await.deref().values() {
             let distance = if let Some(field) = field {
@@ -105,7 +138,9 @@ impl Selector {
                 closest_target.replace((distance, obj.clone()));
             }
         }
-        let Some(closest_target) = closest_target.map(|(_, v)| v) else {
+        let closest_target = closest_target.map(|v| v.1);
+        self.selection = closest_target.clone();
+        let Some(closest_target) = closest_target else {
             _ = self.selection_lines.set_lines(&[]);
             return;
         };
@@ -131,6 +166,30 @@ impl Selector {
             .iter_mut()
             .for_each(|l| *l = l.clone().thickness(0.0025));
         _ = self.selection_lines.set_lines(&lines);
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct CapturedSelection {
+    spatial: Spatial,
+    reparentable: ReparentableProxy<'static>,
+    reparent_lock: ReparentLockProxy<'static>,
+}
+
+impl CapturedSelection {
+    pub fn spatial(&self) -> &Spatial {
+        &self.spatial
+    }
+}
+
+impl Drop for CapturedSelection {
+    fn drop(&mut self) {
+        tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(async {
+                _ = self.reparentable.unparent().await;
+                _ = self.reparent_lock.unlock().await;
+            });
+        });
     }
 }
 
