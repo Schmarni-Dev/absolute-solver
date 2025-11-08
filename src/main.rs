@@ -1,3 +1,4 @@
+pub mod mover;
 pub mod ring;
 pub mod selection;
 
@@ -9,18 +10,19 @@ use stardust_xr_fusion::{
     core::schemas::zbus::Connection,
     drawable::{Line, LinePoint, Lines, LinesAspect, MaterialParameter, Model, ModelPartAspect},
     input::InputDataType,
-    node::OwnedAspect,
+    node::NodeType,
     objects::object_registry::ObjectRegistry,
     project_local_resources,
     root::{RootAspect, RootEvent},
-    spatial::{SpatialAspect, Transform},
+    spatial::{Spatial, SpatialAspect, Transform},
     values::{ResourceID, color::rgba_linear},
 };
 use stardust_xr_molecules::{accent_color::AccentColor, input_action::SimpleAction};
 
 use crate::{
+    mover::Mover,
     ring::Ring,
-    selection::{CapturedSelection, Ray, Selector},
+    selection::{Ray, Selector},
 };
 
 #[tokio::main]
@@ -37,9 +39,9 @@ async fn main() {
     let obj_reg = ObjectRegistry::new(&conn).await;
     let mut accent_color = AccentColor::new(conn.clone());
     let mut ring = Ring::new(conn, &client).unwrap();
-    let mut selector = Selector::new(client.clone(), obj_reg).await.unwrap();
 
-    let mut captured_selection: Option<CapturedSelection> = None;
+    let input_spatial = Spatial::create(client.get_root(), Transform::none(), false).unwrap();
+    let mut captured_selection: Option<Mover> = None;
 
     let mut solver_active = SimpleAction::default();
     let solver_model = Model::create(
@@ -49,8 +51,21 @@ async fn main() {
     )
     .unwrap();
 
+    let solver_target_model = Model::create(
+        client.get_root(),
+        Transform::identity(),
+        &ResourceID::new_namespaced("absolute_solver", "solver"),
+    )
+    .unwrap();
+    _ = solver_target_model.set_enabled(false);
+
+    let mut selector = Selector::new(client.clone(), obj_reg, solver_target_model.clone())
+        .await
+        .unwrap();
+
     // change solver color to match accent color
     let solver_part = solver_model.part("Solver").unwrap();
+    let solver_target_part = solver_target_model.part("Solver").unwrap();
     tokio::task::spawn(async move {
         while accent_color.color.changed().await.is_ok() {
             let mut color = accent_color.color();
@@ -63,6 +78,9 @@ async fn main() {
             color.c.b *= factor;
 
             solver_part
+                .set_material_parameter("emission_factor", MaterialParameter::Color(color))
+                .unwrap();
+            solver_target_part
                 .set_material_parameter("emission_factor", MaterialParameter::Color(color))
                 .unwrap();
         }
@@ -103,7 +121,7 @@ async fn main() {
                 let max_distance_from_center = p
                     .iter()
                     .map(|point| point.distance(center))
-                    .reduce(|a, b| if a > b { a } else { b })
+                    .reduce(|a, b| if a < b { a } else { b })
                     .unwrap_or_default();
 
                 max_distance_from_center > 0.025
@@ -192,24 +210,31 @@ async fn main() {
         });
         lines.set_lines(&lines_data).unwrap();
 
+        _ = input_spatial.set_local_transform(Transform::from_translation_rotation(
+            triangle_center,
+            {
+                let ref_quat = rotation;
+                ref_quat * Quat::from_rotation_arc(Vec3::NEG_Z, ref_quat.inverse() * normal)
+            },
+        ));
+
         if solver_active.started_acting().contains(&input) {
-            captured_selection = selector.capture_selected().await;
+            let sel = selector.capture_selected().await;
+            captured_selection = match sel {
+                Some(sel) => Mover::new(sel, input_spatial.clone().as_spatial_ref()).ok(),
+                None => None,
+            };
         }
         // we can use this solver active with containing input to get when we start and stop expanding our fingers to be able to switch between selection and levitation
         if solver_active.currently_acting().contains(&input) {
             // TODO: replace with actual transform functionality
-            if let Some(sel) = captured_selection.as_ref() {
-                _ = sel
-                    .spatial()
-                    .set_local_transform(Transform::from_translation_rotation(
-                        triangle_center,
-                        rotation * Quat::from_rotation_x(FRAC_PI_2),
-                    ));
+            if let Some(sel) = captured_selection.as_mut() {
+                sel.update().await;
             };
             solver_model.set_enabled(true).unwrap();
             solver_model
                 .set_local_transform(Transform::from_translation_rotation_scale(
-                    triangle_center,
+                    triangle_center + (normal * 0.01),
                     rotation * Quat::from_rotation_x(FRAC_PI_2),
                     [diameter * 2.0; 3],
                 ))

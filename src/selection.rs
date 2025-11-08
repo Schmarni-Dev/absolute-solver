@@ -1,9 +1,10 @@
-use std::{ops::Deref, sync::Arc};
+use core::f32;
+use std::{f32::consts::FRAC_PI_2, ops::Deref, sync::Arc};
 
 use glam::{Quat, Vec3};
 use stardust_xr_fusion::{
     ClientHandle,
-    drawable::{Lines, LinesAspect},
+    drawable::{Lines, LinesAspect, Model},
     fields::{FieldRef, FieldRefAspect},
     list_query::{ListEvent, ObjectListQuery},
     node::{NodeResult, NodeType},
@@ -34,6 +35,7 @@ pub struct Selector {
         ReparentLockProxy<'static>,
         Option<FieldRef>,
     )>,
+    target_model: Model,
     _mapper_task: AbortOnDrop,
 }
 
@@ -41,6 +43,7 @@ impl Selector {
     pub async fn new(
         client: Arc<ClientHandle>,
         object_registry: Arc<ObjectRegistry>,
+        target_model: Model,
     ) -> NodeResult<Self> {
         let selection_lines = Lines::create(client.get_root(), Transform::none(), &[])?;
         let (query, mapper) = ObjectQuery::<
@@ -64,32 +67,49 @@ impl Selector {
             _mapper_task: AbortOnDrop(mapper.abort_handle()),
             selection_lines,
             selection: None,
+            target_model,
         })
     }
     pub async fn capture_selected(&mut self) -> Option<CapturedSelection> {
-        let Some((spatial_ref, reparentable, reparent_lock, _)) = self.selection.take() else {
-            return None;
-        };
+        let (spatial_ref, reparentable, reparent_lock, _) = self.selection.take()?;
         if let Err(_) = reparent_lock.lock().await {
             return None;
         }
         let root = self.selection_lines.client().get_root();
         let spatial = Spatial::create(root, Transform::none(), false).ok()?;
-        spatial.set_relative_transform(
-            &spatial_ref,
-            Transform {
-                translation: Some([0.; 3].into()),
-                rotation: Some(Quat::IDENTITY.into()),
-                scale: None,
-            },
-        );
+        spatial
+            .set_relative_transform(
+                &spatial_ref,
+                Transform {
+                    translation: Some([0.; 3].into()),
+                    rotation: Some(Quat::IDENTITY.into()),
+                    scale: None,
+                },
+            )
+            .unwrap();
         _ = reparentable
             .parent(spatial.export_spatial().await.ok()?)
             .await;
+        _ = self.selection_lines.set_lines(&[]);
+        _ = self.target_model.set_enabled(true);
+        {
+            let bb = spatial_ref.get_local_bounding_box().await.ok()?;
+            let longest = Vec3Component::find_longest(bb.size);
+            let other_size = longest.other_max(bb.size);
+            _ = self.target_model.set_spatial_parent(&spatial_ref);
+            _ = self
+                .target_model
+                .set_local_transform(Transform::from_translation_rotation_scale(
+                    bb.center,
+                    longest.rotation() * Quat::from_rotation_y(f32::consts::FRAC_PI_2),
+                    [other_size * 2.0; 3],
+                ));
+        }
         Some(CapturedSelection {
             spatial,
             reparentable,
             reparent_lock,
+            target_model: self.target_model.clone(),
         })
     }
     pub async fn update_selection(&mut self, ray: Ray) {
@@ -172,6 +192,7 @@ impl Selector {
 #[derive(Debug, Clone)]
 pub struct CapturedSelection {
     spatial: Spatial,
+    target_model: Model,
     reparentable: ReparentableProxy<'static>,
     reparent_lock: ReparentLockProxy<'static>,
 }
@@ -184,6 +205,10 @@ impl CapturedSelection {
 
 impl Drop for CapturedSelection {
     fn drop(&mut self) {
+        _ = self.target_model.set_enabled(false);
+        _ = self
+            .target_model
+            .set_spatial_parent(self.spatial().client().get_root());
         tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(async {
                 _ = self.reparentable.unparent().await;
@@ -198,4 +223,55 @@ pub struct Ray {
     pub origin: Vec3,
     pub direction: Vec3,
     pub ref_space: SpatialRef,
+}
+
+enum Vec3Component {
+    X,
+    Y,
+    Z,
+}
+impl Vec3Component {
+    fn find_longest(vec: impl Into<Vec3>) -> Self {
+        let v = vec.into();
+        if v.x >= v.y && v.x >= v.z {
+            Self::X
+        } else if v.y >= v.x && v.y >= v.z {
+            Self::Y
+        } else {
+            Self::Z
+        }
+    }
+    fn find_shortest(vec: impl Into<Vec3>) -> Self {
+        let v = vec.into();
+        if v.x <= v.y && v.x <= v.z {
+            Self::X
+        } else if v.y <= v.x && v.y <= v.z {
+            Self::Y
+        } else {
+            Self::Z
+        }
+    }
+    fn other_max(&self, vec: impl Into<Vec3>) -> f32 {
+        let v = vec.into();
+        match self {
+            Vec3Component::X => v.y.max(v.z),
+            Vec3Component::Y => v.x.max(v.z),
+            Vec3Component::Z => v.x.max(v.y),
+        }
+    }
+    fn rotation(&self) -> Quat {
+        match self {
+            Vec3Component::X => Quat::from_rotation_y(FRAC_PI_2) * Quat::from_rotation_x(FRAC_PI_2),
+            Vec3Component::Y => Quat::IDENTITY,
+            Vec3Component::Z => Quat::from_rotation_x(FRAC_PI_2),
+        }
+    }
+    fn get(&self, vec: impl Into<Vec3>) -> f32 {
+        let v = vec.into();
+        match self {
+            Vec3Component::X => v.x,
+            Vec3Component::Y => v.y,
+            Vec3Component::Z => v.z,
+        }
+    }
 }
