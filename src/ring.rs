@@ -102,7 +102,7 @@ impl Ring {
                     let quat = Quat::from(tip.orientation);
                     Vec3::from(tip.origin) + quat.mul_vec3(Vec3::Z * 0.05)
                 }
-                InputDataType::Hand(hand) => Vec3::from(hand.palm.position),
+                InputDataType::Hand(hand) => Vec3::from(hand.wrist.position),
             };
             _ = self.attach_lines.set_lines(&[Line {
                 points: vec![
@@ -135,8 +135,8 @@ impl Ring {
                     (Vec3::from(tip.origin) + quat.mul_vec3(Vec3::Z * 0.05), quat)
                 }
                 InputDataType::Hand(hand) => (
-                    hand.palm.position.into(),
-                    Quat::from(hand.palm.rotation) * Quat::from_rotation_x(FRAC_PI_2),
+                    hand.wrist.position.into(),
+                    Quat::from(hand.wrist.rotation),
                 ),
             };
             self.grabbable.set_pose(pos, rot);
@@ -173,7 +173,7 @@ impl Ring {
                     let quat = Quat::from(tip.orientation);
                     pos.distance(Vec3A::from(tip.origin) + quat.mul_vec3a(Vec3A::Z * 0.05)) < 0.05
                 }
-                InputDataType::Hand(hand) => pos.distance(hand.palm.position.into()) < 0.05,
+                InputDataType::Hand(hand) => pos.distance(hand.wrist.position.into()) < 0.05,
             })
             .reduce(|a, b| if a.0.distance < b.0.distance { a } else { b })
     }
