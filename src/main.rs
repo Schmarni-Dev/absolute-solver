@@ -111,20 +111,11 @@ async fn main() {
         solver_active.update(&ring.input, &|data| match &data.input {
             InputDataType::Pointer(_) => false,
             InputDataType::Hand(hand) => {
-                let p: [Vec3; 3] = [
-                    hand.thumb.tip.position.into(),
-                    hand.index.tip.position.into(),
-                    hand.middle.tip.position.into(),
-                ];
-                let (center, _) =
-                    get_position_and_normal_from_triangle(p, hand.palm.rotation.into());
-                let max_distance_from_center = p
-                    .iter()
-                    .map(|point| point.distance(center))
-                    .reduce(|a, b| if a < b { a } else { b })
-                    .unwrap_or_default();
+                let distance = Vec3::from(hand.thumb.tip.position)
+                    .distance(hand.index.tip.position.into())
+                    - (hand.thumb.tip.radius + hand.index.tip.radius);
 
-                max_distance_from_center > 0.025
+                distance > 0.02
             }
             InputDataType::Tip(_) => data.datamap.with_data(|d| d.idx("grab").as_f32() > 0.5),
         });
