@@ -17,16 +17,17 @@ pub struct Mover {
 }
 
 impl Mover {
-    pub fn new(selection: CapturedSelection, input_spatial: SpatialRef) -> NodeResult<Self> {
+    pub async fn new(selection: CapturedSelection, input_spatial: SpatialRef) -> NodeResult<Self> {
         let target = Spatial::create(&input_spatial, Transform::none(), false)?;
-        target.set_relative_transform(
-            selection.spatial(),
-            Transform {
-                translation: Some(Vec3::ZERO.into()),
-                rotation: Some(Quat::IDENTITY.into()),
-                scale: None,
-            },
-        )?;
+        let len = selection
+            .spatial()
+            .get_transform(&input_spatial)
+            .await?
+            .translation
+            .map(Vec3A::from)
+            .unwrap_or_default()
+            .length();
+        _ = target.set_local_transform(Transform::from_translation(Vec3::NEG_Z * len));
         Ok(Self {
             selection,
             target,
@@ -54,11 +55,11 @@ impl Mover {
         let sel_len = sel_translation.length();
         let target_len = target_translation.length();
         let sel_quat = Quat::from_rotation_arc(Vec3::NEG_Z, sel_translation.normalize().into());
-        let target_quat = Quat::from_rotation_arc(Vec3::NEG_Z, target_translation.normalize().into());
+        let target_quat =
+            Quat::from_rotation_arc(Vec3::NEG_Z, target_translation.normalize().into());
         let quat = target_quat.slerp(sel_quat, lerp_factor);
         let len = target_len.lerp(sel_len, lerp_factor);
         let translation = (quat * Vec3::NEG_Z) * len;
-        // let translation = target_translation.lerp(sel_translation, lerp_factor);
         let rotation = target_rotation.slerp(sel_rotation, lerp_factor);
         sel.set_relative_transform(
             &self.input,

@@ -221,7 +221,9 @@ async fn main() {
         if solver_active.started_acting().contains(&input) {
             let sel = selector.capture_selected().await;
             captured_selection = match sel {
-                Some(sel) => Mover::new(sel, input_spatial.clone().as_spatial_ref()).ok(),
+                Some(sel) => Mover::new(sel, input_spatial.clone().as_spatial_ref())
+                    .await
+                    .ok(),
                 None => None,
             };
         }
