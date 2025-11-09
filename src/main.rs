@@ -50,6 +50,7 @@ async fn main() {
         &ResourceID::new_namespaced("absolute_solver", "solver"),
     )
     .unwrap();
+    _ = solver_model.set_enabled(false);
 
     let solver_target_model = Model::create(
         client.get_root(),
@@ -224,7 +225,7 @@ async fn main() {
             if let Some(sel) = captured_selection.as_mut() {
                 sel.update().await;
             };
-            solver_model.set_enabled(true).unwrap();
+            solver_model.set_enabled(captured_selection.is_some()).unwrap();
             solver_model
                 .set_local_transform(Transform::from_translation_rotation_scale(
                     triangle_center + (normal * 0.01),
