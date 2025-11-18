@@ -7,7 +7,7 @@ use std::f32::consts::FRAC_PI_2;
 use glam::{Quat, Vec3};
 use stardust_xr_fusion::{
     client::Client,
-    core::schemas::zbus::Connection,
+    core::schemas::zbus::{conn::Builder, fdo::ObjectManager},
     drawable::{Line, LinePoint, Lines, LinesAspect, MaterialParameter, Model, ModelPartAspect},
     input::InputDataType,
     node::NodeType,
@@ -35,7 +35,13 @@ async fn main() {
     let event_loop = client.async_event_loop();
     let client = event_loop.client_handle.clone();
     let lines = Lines::create(client.get_root(), Transform::none(), &[]).unwrap();
-    let conn = Connection::session().await.unwrap();
+    let conn = Builder::session()
+        .unwrap()
+        .serve_at("/", ObjectManager)
+        .unwrap()
+        .build()
+        .await
+        .unwrap();
     let obj_reg = ObjectRegistry::new(&conn).await;
     let mut accent_color = AccentColor::new(conn.clone());
     let mut ring = Ring::new(conn, &client).unwrap();
@@ -107,6 +113,8 @@ async fn main() {
         let Some(input) = ring.get_attached_input() else {
             _ = lines.set_lines(&[]);
             _ = solver_model.set_enabled(false);
+            _ = captured_selection.take();
+            _ = solver_target_model.set_enabled(false);
             continue;
         };
         solver_active.update(&ring.input, &|data| match &data.input {
@@ -225,7 +233,9 @@ async fn main() {
             if let Some(sel) = captured_selection.as_mut() {
                 sel.update().await;
             };
-            solver_model.set_enabled(captured_selection.is_some()).unwrap();
+            solver_model
+                .set_enabled(captured_selection.is_some())
+                .unwrap();
             solver_model
                 .set_local_transform(Transform::from_translation_rotation_scale(
                     triangle_center + (normal * 0.01),
