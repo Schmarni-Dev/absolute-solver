@@ -76,7 +76,7 @@ impl Selector {
             return None;
         }
         let root = self.selection_lines.client().get_root();
-        let spatial = Spatial::create(root, Transform::none(), false).ok()?;
+        let spatial = Spatial::create(root, Transform::none()).ok()?;
         spatial
             .set_relative_transform(
                 &spatial_ref,

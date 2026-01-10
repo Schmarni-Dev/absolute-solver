@@ -18,7 +18,7 @@ pub struct Mover {
 
 impl Mover {
     pub async fn new(selection: CapturedSelection, input_spatial: SpatialRef) -> NodeResult<Self> {
-        let target = Spatial::create(&input_spatial, Transform::none(), false)?;
+        let target = Spatial::create(&input_spatial, Transform::none())?;
         let len = selection
             .spatial()
             .get_transform(&input_spatial)

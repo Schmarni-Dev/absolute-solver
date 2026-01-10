@@ -7,7 +7,6 @@ use std::f32::consts::FRAC_PI_2;
 use glam::{Quat, Vec3};
 use stardust_xr_fusion::{
     client::Client,
-    core::schemas::zbus::{conn::Builder, fdo::ObjectManager},
     drawable::{Line, LinePoint, Lines, LinesAspect, MaterialParameter, Model, ModelPartAspect},
     input::InputDataType,
     node::NodeType,
@@ -15,7 +14,7 @@ use stardust_xr_fusion::{
     project_local_resources,
     root::{RootAspect, RootEvent},
     spatial::{Spatial, SpatialAspect, Transform},
-    values::{ResourceID, color::rgba_linear},
+    values::{ResourceID, color::rgba_linear}, zbus::{conn::Builder, fdo::ObjectManager},
 };
 use stardust_xr_molecules::{accent_color::AccentColor, input_action::SimpleAction};
 
@@ -46,7 +45,7 @@ async fn main() {
     let mut accent_color = AccentColor::new(conn.clone());
     let mut ring = Ring::new(conn, &client).unwrap();
 
-    let input_spatial = Spatial::create(client.get_root(), Transform::none(), false).unwrap();
+    let input_spatial = Spatial::create(client.get_root(), Transform::none()).unwrap();
     let mut captured_selection: Option<Mover> = None;
 
     let mut solver_active = SimpleAction::default();

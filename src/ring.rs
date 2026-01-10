@@ -4,14 +4,13 @@ use std::sync::Arc;
 use glam::{Quat, Vec3, Vec3A};
 use stardust_xr_fusion::{
     ClientHandle,
-    core::schemas::zbus::Connection,
     drawable::{Line, LinePoint, Lines, LinesAspect},
     fields::{Field, Shape},
     input::{InputData, InputDataType, InputHandler, InputMethodRef, InputMethodRefAspect},
     node::NodeResult,
     root::FrameInfo,
     spatial::{Spatial, SpatialAspect, Transform},
-    values::color::rgba,
+    values::color::rgba, zbus::Connection,
 };
 use stardust_xr_molecules::{
     FrameSensitive, Grabbable, GrabbableSettings, PointerMode, UIElement,
@@ -29,7 +28,7 @@ pub struct Ring {
 }
 impl Ring {
     pub fn new(conn: Connection, client: &Arc<ClientHandle>) -> NodeResult<Self> {
-        let spatial = Spatial::create(client.get_root(), Transform::none(), false)?;
+        let spatial = Spatial::create(client.get_root(), Transform::none())?;
         let grab_radius = 0.05;
         let grab_thickness = 0.005;
         let grabbable_shape = Shape::Torus(stardust_xr_fusion::fields::TorusShape {
