@@ -1,5 +1,5 @@
 use core::f32;
-use std::sync::Arc;
+use std::{process, sync::Arc};
 
 use glam::{Quat, Vec3, Vec3A};
 use stardust_xr_fusion::{
@@ -10,16 +10,18 @@ use stardust_xr_fusion::{
     node::NodeResult,
     root::FrameInfo,
     spatial::{Spatial, SpatialAspect, Transform},
-    values::color::rgba, zbus::Connection,
+    values::color::rgba,
+    zbus::Connection,
 };
 use stardust_xr_molecules::{
-    FrameSensitive, Grabbable, GrabbableSettings, PointerMode, UIElement,
+    Derezzable, FrameSensitive, Grabbable, GrabbableSettings, PointerMode, UIElement,
     input_action::{InputQueue, InputQueueable},
     lines::{LineExt, circle},
 };
 
 pub struct Ring {
     grabbable: Grabbable,
+    derezzable: Derezzable,
     _grabbable_lines: Lines,
     _input_field: Field,
     pub input: InputQueue,
@@ -32,8 +34,8 @@ impl Ring {
         let grab_radius = 0.05;
         let grab_thickness = 0.005;
         let grabbable_shape = Shape::Torus(stardust_xr_fusion::fields::TorusShape {
-            radius_b: grab_radius,
-            radius_a: grab_thickness,
+            radius_a: grab_radius,
+            radius_b: grab_thickness,
         });
         let grabbable_field = Field::create(
             &spatial,
@@ -41,7 +43,7 @@ impl Ring {
             grabbable_shape.clone(),
         )?;
         let grabbable = Grabbable::create(
-            conn,
+            conn.clone(),
             "/Ring",
             &spatial,
             Transform::none(),
@@ -69,6 +71,12 @@ impl Ring {
         )?;
         let input = InputHandler::create(&spatial, Transform::none(), &input_field)?.queue()?;
         let attach_lines = Lines::create(&spatial, Transform::none(), &[])?;
+        let derezzable = Derezzable::create(
+            conn,
+            "/Ring/Derezzable",
+            grabbable_field.clone().as_spatial(),
+            Some(grabbable_field.clone()),
+        )?;
         Ok(Ring {
             grabbable,
             _grabbable_lines,
@@ -76,9 +84,13 @@ impl Ring {
             input,
             attached_to: None,
             attach_lines,
+            derezzable,
         })
     }
     pub fn update(&mut self, frame_info: &FrameInfo) {
+        if let Ok(_) = self.derezzable.receiver.try_recv() {
+            process::exit(0);
+        }
         if !self.grabbable.handle_events() {
             return;
         }
