@@ -49,7 +49,7 @@ impl Ring {
             Transform::none(),
             &grabbable_field,
             GrabbableSettings {
-                max_distance: 0.01,
+                max_distance: 0.03,
                 linear_momentum: None,
                 angular_momentum: None,
                 magnet: false,
@@ -91,10 +91,9 @@ impl Ring {
         if let Ok(_) = self.derezzable.receiver.try_recv() {
             process::exit(0);
         }
-        if !self.grabbable.handle_events() {
-            return;
-        }
-        if !self.input.handle_events() {
+        let grab_event = self.grabbable.handle_events();
+        let input_event = self.input.handle_events();
+        if !(grab_event || input_event) {
             return;
         }
         self.grabbable.frame(frame_info);
