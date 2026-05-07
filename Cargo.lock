@@ -6,7 +6,7 @@ version = 4
 name = "absolute-solver"
 version = "0.1.0"
 dependencies = [
- "glam 0.29.3",
+ "glam",
  "stardust-xr-fusion",
  "stardust-xr-molecules",
  "tokio",
@@ -619,15 +619,6 @@ name = "gimli"
 version = "0.32.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e629b9b98ef3dd8afe6ca2bd0f89306cec16d43d907889945bc5d6687f2f13c7"
-
-[[package]]
-name = "glam"
-version = "0.29.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8babf46d4c1c9d92deac9f7be466f76dfc4482b6452fc5024b5e8daf6ffeb3ee"
-dependencies = [
- "mint",
-]
 
 [[package]]
 name = "glam"
@@ -1523,12 +1514,13 @@ checksum = "6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596"
 
 [[package]]
 name = "stardust-xr-fusion"
-version = "0.50.0"
-source = "git+http://github.com/StardustXR/core.git#0c00d7a7d977e6681125464cc70b33e7ba29f910"
+version = "0.51.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b162f227c32348e2f7e6ab824215a4abbd4ba6b22c781062763e0ffdad584d27"
 dependencies = [
  "color-eyre",
  "convert_case",
- "glam 0.30.10",
+ "glam",
  "global_counter",
  "parking_lot 0.12.5",
  "prettyplease",
@@ -1549,8 +1541,9 @@ dependencies = [
 
 [[package]]
 name = "stardust-xr-gluon"
-version = "0.50.0"
-source = "git+http://github.com/StardustXR/core.git#0c00d7a7d977e6681125464cc70b33e7ba29f910"
+version = "0.51.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "61487ba4b8641a451fc69c4e9eb2bfa740d252ae3e69878854790b8546383f83"
 dependencies = [
  "futures",
  "nanoid",
@@ -1562,12 +1555,13 @@ dependencies = [
 
 [[package]]
 name = "stardust-xr-molecules"
-version = "0.50.0"
-source = "git+http://github.com/StardustXR/molecules.git#d77dc87cb61dadf211e0e9ee40e08763bcf2de6b"
+version = "0.51.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3cd7161f6aa690529bbb431bc9cbb52107d30ffabb0bb03dd4810080bded0c1c"
 dependencies = [
  "ashpd",
  "futures-util",
- "glam 0.30.10",
+ "glam",
  "lazy_static",
  "lerp",
  "rustc-hash",
@@ -1580,8 +1574,9 @@ dependencies = [
 
 [[package]]
 name = "stardust-xr-protocol"
-version = "0.50.0"
-source = "git+http://github.com/StardustXR/core.git#0c00d7a7d977e6681125464cc70b33e7ba29f910"
+version = "0.51.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e28c4a6c811873f9a39024cc7b1891617397e70599934233af1283de635ee056"
 dependencies = [
  "fnv",
  "kdl",
@@ -1590,8 +1585,9 @@ dependencies = [
 
 [[package]]
 name = "stardust-xr-wire"
-version = "0.50.0"
-source = "git+http://github.com/StardustXR/core.git#0c00d7a7d977e6681125464cc70b33e7ba29f910"
+version = "0.51.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d89abc2d5ae7fe23e57fe3c0aa0976c7208b71b60308bba583946629f91e1966"
 dependencies = [
  "dirs",
  "flatbuffers",
