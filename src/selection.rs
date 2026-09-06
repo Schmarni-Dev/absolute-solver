@@ -1,277 +1,263 @@
 use core::f32;
-use std::{f32::consts::FRAC_PI_2, ops::Deref, sync::Arc};
+use std::{f32::consts::FRAC_PI_2, sync::Mutex};
 
 use glam::{Quat, Vec3};
+use gluon::{Interface, Node, RefExt};
+use rustc_hash::FxHashMap;
 use stardust_xr_fusion::{
-    ClientHandle,
-    drawable::{Lines, LinesAspect, Model},
-    fields::{FieldRef, FieldRefAspect},
-    list_query::{ListEvent, ObjectListQuery},
-    node::{NodeResult, NodeType},
-    objects::{
-        interfaces::{ReparentLockProxy, ReparentableProxy},
-        object_registry::ObjectRegistry,
-    },
-    query::ObjectQuery,
-    spatial::{Spatial, SpatialAspect, SpatialRef, SpatialRefAspect, Transform},
+	Result,
+	client::{Client, ClientHandler},
+	drawable::{Lines, LinesExt},
+	fields::{FieldRef, RayMarchResult},
+	query::{InterfaceDependency, QueriedInterface, QueryableId},
+	spatial::{PartialTransform, Spatial, SpatialExt, SpatialInterface, SpatialRef, Transform},
+	spatial_query::{BeamQuery, BeamQueryHandle, BeamQueryHandler, BeamQueryHandlerHandler},
 };
 use stardust_xr_molecules::{
-    dbus::AbortOnDrop,
-    lines::{LineExt, bounding_box},
+	lines::{LineExt, bounding_box},
+	transformable::protocol::Poseable,
 };
 use tracing::warn;
 
 pub struct Selector {
-    query: ObjectListQuery<(
-        SpatialRef,
-        ReparentableProxy<'static>,
-        ReparentLockProxy<'static>,
-        Option<FieldRef>,
-    )>,
-    selection_lines: Lines,
-    selection: Option<(
-        SpatialRef,
-        ReparentableProxy<'static>,
-        ReparentLockProxy<'static>,
-        Option<FieldRef>,
-    )>,
-    target_model: Model,
-    _mapper_task: AbortOnDrop,
+	beams: Node<Beams>,
+	query: BeamQueryHandle,
+	spatial_interface: SpatialInterface,
+	selection_lines: Lines,
+	lines_spatial: Spatial,
+	lines_spatial_ref: SpatialRef,
+	target: Spatial,
+	root: SpatialRef,
+	selection: Option<Selection>,
 }
 
 impl Selector {
-    pub async fn new(
-        client: Arc<ClientHandle>,
-        object_registry: Arc<ObjectRegistry>,
-        target_model: Model,
-    ) -> NodeResult<Self> {
-        let selection_lines = Lines::create(client.get_root(), Transform::none(), &[])?;
-        let (query, mapper) = ObjectQuery::<
-            (
-                SpatialRef,
-                ReparentableProxy<'static>,
-                ReparentLockProxy<'static>,
-                Option<FieldRef>,
-            ),
-            ClientHandle,
-        >::new(object_registry, client)
-        .to_list_query();
-        let mapper = tokio::spawn(mapper.init(async |e| match e {
-            ListEvent::NewMatch(v) => Some(v),
-            ListEvent::Modified(v) => Some(v),
-            ListEvent::MatchLost => None,
-            _ => None,
-        }));
-        Ok(Self {
-            query,
-            _mapper_task: AbortOnDrop(mapper.abort_handle()),
-            selection_lines,
-            selection: None,
-            target_model,
-        })
-    }
-    pub async fn capture_selected(&mut self) -> Option<CapturedSelection> {
-        let (spatial_ref, reparentable, reparent_lock, _) = self.selection.take()?;
-        if let Err(_) = reparent_lock.lock().await {
-            return None;
-        }
-        let root = self.selection_lines.client().get_root();
-        let spatial = Spatial::create(root, Transform::none()).ok()?;
-        spatial
-            .set_relative_transform(
-                &spatial_ref,
-                Transform {
-                    translation: Some([0.; 3].into()),
-                    rotation: Some(Quat::IDENTITY.into()),
-                    scale: None,
-                },
-            )
-            .unwrap();
-        _ = reparentable
-            .parent(spatial.export_spatial().await.ok()?)
-            .await;
-        _ = self.selection_lines.set_lines(&[]);
-        _ = self.target_model.set_enabled(true);
-        {
-            let bb = spatial_ref.get_local_bounding_box().await.ok()?;
-            let longest = Vec3Component::find_longest(bb.size);
-            let other_size = longest.other_max(bb.size);
-            _ = self.target_model.set_spatial_parent(&spatial_ref);
-            _ = self
-                .target_model
-                .set_local_transform(Transform::from_translation_rotation_scale(
-                    bb.center,
-                    longest.rotation() * Quat::from_rotation_y(f32::consts::FRAC_PI_2),
-                    [other_size * 2.0; 3],
-                ));
-        }
-        Some(CapturedSelection {
-            spatial,
-            reparentable,
-            reparent_lock,
-            target_model: self.target_model.clone(),
-        })
-    }
-    pub async fn update_selection(&mut self, ray: Ray) {
-        let mut closest_target = None;
-        for obj @ (spatial, _, _, field) in self.query.iter().await.deref().values() {
-            let distance = if let Some(field) = field {
-                let Ok(raymarch_result) = field
-                    .ray_march(&ray.ref_space, ray.origin, ray.direction)
-                    .await
-                else {
-                    continue;
-                };
-                // field not hit
-                if raymarch_result.min_distance > 0.0 {
-                    continue;
-                }
-                raymarch_result.deepest_point_distance
-            } else {
-                let Ok(Some(pos)) = spatial
-                    .get_transform(&ray.ref_space)
-                    .await
-                    .map(|t| t.translation)
-                else {
-                    continue;
-                };
-                let pos = Vec3::from(pos);
-                let ray_relative = pos - ray.origin;
-                let ray_distance = ray_relative.dot(ray.direction);
-                // spatial is behind ray
-                if ray_distance.is_sign_negative() {
-                    continue;
-                }
-                let point_on_ray = ray.origin + (ray.direction * ray_distance);
-                let distance_from_ray = pos.distance(point_on_ray);
-                // a cone shape to make selecting far away objects easier
-                if distance_from_ray > ray_distance * 0.1 {
-                    continue;
-                }
+	pub async fn new(
+		client: &Client<impl ClientHandler>,
+		reference_space: SpatialRef,
+		target: Spatial,
+	) -> Result<Self> {
+		let (lines_spatial, lines_spatial_ref) =
+			Spatial::new(client, client.root(), Transform::IDENTITY).await?;
+		let selection_lines = Lines::new(client, &lines_spatial, Vec::new()).await?;
+		let (beams, beams_ref) = BeamQueryHandler::new_node(Beams::default())?;
+		let query = client
+			.spatial_query_interface()
+			.beam_query(BeamQuery {
+				handler: beams_ref.into_proxy(),
+				interfaces: vec![InterfaceDependency {
+					id: Poseable::ID.to_string(),
+					optional: false,
+				}],
+				reference_spatial: reference_space,
+				origin: [0.0; 3].into(),
+				direction: Vec3::NEG_Z.into(),
+				max_length: f32::MAX,
+			})
+			.await??;
 
-                distance_from_ray + ray_distance
-            };
-            if closest_target
-                .as_ref()
-                .is_none_or(|(dist, _)| distance < *dist)
-            {
-                closest_target.replace((distance, obj.clone()));
-            }
-        }
-        let closest_target = closest_target.map(|v| v.1);
-        self.selection = closest_target.clone();
-        let Some(closest_target) = closest_target else {
-            _ = self.selection_lines.set_lines(&[]);
-            return;
-        };
-        _ = self.selection_lines.set_relative_transform(
-            &closest_target.0,
-            Transform {
-                translation: Some(Vec3::ZERO.into()),
-                rotation: Some(Quat::IDENTITY.into()),
-                scale: None,
-            },
-        );
-        let Ok(bb) = closest_target
-            .0
-            .get_relative_bounding_box(&self.selection_lines)
-            .await
-        else {
-            warn!("can't get bounding box");
-            _ = self.selection_lines.set_lines(&[]);
-            return;
-        };
-        let mut lines = bounding_box(bb);
-        lines
-            .iter_mut()
-            .for_each(|l| *l = l.clone().thickness(0.0025));
-        _ = self.selection_lines.set_lines(&lines);
-    }
+		Ok(Selector {
+			beams,
+			query,
+			spatial_interface: client.spatial_interface().clone(),
+			selection_lines,
+			lines_spatial,
+			lines_spatial_ref,
+			target,
+			root: client.root().clone(),
+			selection: None,
+		})
+	}
+	pub async fn update_selection(&mut self, origin: Vec3, direction: Vec3) {
+		_ = self.query.update(origin.into(), direction.into(), f32::MAX);
+		self.selection = self.beams.closest();
+		let Some(selection) = self.selection.clone() else {
+			_ = self.selection_lines.set_lines(Vec::new());
+			return;
+		};
+		_ = self.lines_spatial.set_relative_transform(
+			selection.spatial.clone(),
+			PartialTransform::from_translation_rotation(Vec3::ZERO, Quat::IDENTITY),
+		);
+		let Ok(Ok(bb)) = self
+			.spatial_interface
+			.get_relative_bounding_box(self.lines_spatial_ref.clone(), selection.spatial)
+			.await
+		else {
+			warn!("can't get bounding box");
+			_ = self.selection_lines.set_lines(Vec::new());
+			return;
+		};
+		let lines = bounding_box(bb)
+			.into_iter()
+			.map(|l| l.thickness(0.0025))
+			.collect::<Vec<_>>();
+		_ = self.selection_lines.set_lines(lines);
+	}
+	pub async fn capture_selected(&mut self) -> Option<CapturedSelection> {
+		let selection = self.selection.take()?;
+		_ = self.selection_lines.set_lines(Vec::new());
+
+		let bb = self
+			.spatial_interface
+			.get_relative_bounding_box(selection.spatial.clone(), selection.spatial.clone())
+			.await
+			.ok()?
+			.ok()?;
+		let longest = Vec3Component::find_longest(bb.extents);
+		let other_size = longest.other_max(bb.extents);
+		_ = self.target.set_parent(selection.spatial.clone());
+		_ = self
+			.target
+			.set_local_transform(PartialTransform::from_translation_rotation_scale(
+				bb.center,
+				longest.rotation() * Quat::from_rotation_y(FRAC_PI_2),
+				[other_size * 2.0; 3],
+			));
+
+		Some(CapturedSelection {
+			selection,
+			target: self.target.clone(),
+			root: self.root.clone(),
+		})
+	}
 }
 
 #[derive(Debug, Clone)]
+pub struct Selection {
+	pub spatial: SpatialRef,
+	pub poseable: Poseable,
+}
+
 pub struct CapturedSelection {
-    spatial: Spatial,
-    target_model: Model,
-    reparentable: ReparentableProxy<'static>,
-    reparent_lock: ReparentLockProxy<'static>,
+	selection: Selection,
+	target: Spatial,
+	root: SpatialRef,
 }
-
 impl CapturedSelection {
-    pub fn spatial(&self) -> &Spatial {
-        &self.spatial
-    }
+	pub fn spatial(&self) -> &SpatialRef {
+		&self.selection.spatial
+	}
+	pub fn poseable(&self) -> &Poseable {
+		&self.selection.poseable
+	}
 }
-
 impl Drop for CapturedSelection {
-    fn drop(&mut self) {
-        _ = self.target_model.set_enabled(false);
-        _ = self
-            .target_model
-            .set_spatial_parent(self.spatial().client().get_root());
-        tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(async {
-                _ = self.reparentable.unparent().await;
-                _ = self.reparent_lock.unlock().await;
-            });
-        });
-    }
+	fn drop(&mut self) {
+		_ = self.target.set_parent(self.root.clone());
+		_ = self
+			.target
+			.set_local_transform(PartialTransform::from_scale(Vec3::ZERO));
+	}
 }
 
-#[derive(Debug, Clone)]
-pub struct Ray {
-    pub origin: Vec3,
-    pub direction: Vec3,
-    pub ref_space: SpatialRef,
+#[derive(Default, gluon::Handler)]
+struct Beams(Mutex<FxHashMap<QueryableId, Hit>>);
+struct Hit {
+	selection: Selection,
+	min_distance: f32,
+	depth: f32,
+}
+impl Beams {
+	fn closest(&self) -> Option<Selection> {
+		self.0
+			.lock()
+			.unwrap()
+			.values()
+			.filter(|hit| hit.min_distance <= 0.0)
+			.reduce(|a, b| if a.depth < b.depth { a } else { b })
+			.map(|hit| hit.selection.clone())
+	}
+	fn poseable(interfaces: Vec<QueriedInterface>) -> Option<Poseable> {
+		interfaces
+			.into_iter()
+			.find(|i| i.interface_id == Poseable::ID)
+			.map(|i| Poseable::from_ref(i.interface))
+	}
+}
+impl BeamQueryHandlerHandler for Beams {
+	async fn intersected(
+		&self,
+		_ctx: gluon::Context,
+		obj: QueryableId,
+		_field: FieldRef,
+		spatial: SpatialRef,
+		interfaces: Vec<QueriedInterface>,
+		spatial_info: RayMarchResult,
+	) {
+		let Some(poseable) = Self::poseable(interfaces) else {
+			return;
+		};
+		self.0.lock().unwrap().insert(
+			obj,
+			Hit {
+				selection: Selection { spatial, poseable },
+				min_distance: spatial_info.min_distance,
+				depth: spatial_info.deepest_point_distance,
+			},
+		);
+	}
+
+	async fn interfaces_changed(
+		&self,
+		_ctx: gluon::Context,
+		obj: QueryableId,
+		interfaces: Vec<QueriedInterface>,
+	) {
+		let mut hits = self.0.lock().unwrap();
+		match Self::poseable(interfaces) {
+			Some(poseable) => {
+				if let Some(hit) = hits.get_mut(&obj) {
+					hit.selection.poseable = poseable;
+				}
+			}
+			None => {
+				hits.remove(&obj);
+			}
+		}
+	}
+
+	async fn moved(&self, _ctx: gluon::Context, obj: QueryableId, spatial_info: RayMarchResult) {
+		if let Some(hit) = self.0.lock().unwrap().get_mut(&obj) {
+			hit.min_distance = spatial_info.min_distance;
+			hit.depth = spatial_info.deepest_point_distance;
+		}
+	}
+
+	async fn left(&self, _ctx: gluon::Context, obj: QueryableId) {
+		self.0.lock().unwrap().remove(&obj);
+	}
 }
 
 enum Vec3Component {
-    X,
-    Y,
-    Z,
+	X,
+	Y,
+	Z,
 }
 impl Vec3Component {
-    fn find_longest(vec: impl Into<Vec3>) -> Self {
-        let v = vec.into();
-        if v.x >= v.y && v.x >= v.z {
-            Self::X
-        } else if v.y >= v.x && v.y >= v.z {
-            Self::Y
-        } else {
-            Self::Z
-        }
-    }
-    fn find_shortest(vec: impl Into<Vec3>) -> Self {
-        let v = vec.into();
-        if v.x <= v.y && v.x <= v.z {
-            Self::X
-        } else if v.y <= v.x && v.y <= v.z {
-            Self::Y
-        } else {
-            Self::Z
-        }
-    }
-    fn other_max(&self, vec: impl Into<Vec3>) -> f32 {
-        let v = vec.into();
-        match self {
-            Vec3Component::X => v.y.max(v.z),
-            Vec3Component::Y => v.x.max(v.z),
-            Vec3Component::Z => v.x.max(v.y),
-        }
-    }
-    fn rotation(&self) -> Quat {
-        match self {
-            Vec3Component::X => Quat::from_rotation_y(FRAC_PI_2) * Quat::from_rotation_x(FRAC_PI_2),
-            Vec3Component::Y => Quat::IDENTITY,
-            Vec3Component::Z => Quat::from_rotation_x(FRAC_PI_2),
-        }
-    }
-    fn get(&self, vec: impl Into<Vec3>) -> f32 {
-        let v = vec.into();
-        match self {
-            Vec3Component::X => v.x,
-            Vec3Component::Y => v.y,
-            Vec3Component::Z => v.z,
-        }
-    }
+	fn find_longest(vec: impl Into<Vec3>) -> Self {
+		let v = vec.into();
+		if v.x >= v.y && v.x >= v.z {
+			Self::X
+		} else if v.y >= v.x && v.y >= v.z {
+			Self::Y
+		} else {
+			Self::Z
+		}
+	}
+	fn other_max(&self, vec: impl Into<Vec3>) -> f32 {
+		let v = vec.into();
+		match self {
+			Vec3Component::X => v.y.max(v.z),
+			Vec3Component::Y => v.x.max(v.z),
+			Vec3Component::Z => v.x.max(v.y),
+		}
+	}
+	fn rotation(&self) -> Quat {
+		match self {
+			Vec3Component::X => Quat::from_rotation_y(FRAC_PI_2) * Quat::from_rotation_x(FRAC_PI_2),
+			Vec3Component::Y => Quat::IDENTITY,
+			Vec3Component::Z => Quat::from_rotation_x(FRAC_PI_2),
+		}
+	}
 }

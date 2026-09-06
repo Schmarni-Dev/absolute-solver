@@ -1,70 +1,62 @@
-use glam::{FloatExt, Quat, Vec3, Vec3A};
+use glam::{FloatExt, Quat, Vec3};
 use stardust_xr_fusion::{
-    node::NodeResult,
-    spatial::{Spatial, SpatialAspect, SpatialRef, SpatialRefAspect, Transform},
+	spatial::{SpatialInterface, SpatialRef},
+	types::Posef,
 };
 
 use crate::selection::CapturedSelection;
 
 pub struct Mover {
-    selection: CapturedSelection,
-    target: Spatial,
-    input: SpatialRef,
-    // m/s
-    // selection_velocity: Vec3A,
-    // rotation axis scaled by radians/s
-    // selection_angular_velocity: Vec3A,
+	selection: CapturedSelection,
+	spatial_interface: SpatialInterface,
+	input: SpatialRef,
+	distance: f32,
 }
 
 impl Mover {
-    pub async fn new(selection: CapturedSelection, input_spatial: SpatialRef) -> NodeResult<Self> {
-        let target = Spatial::create(&input_spatial, Transform::none())?;
-        let len = selection
-            .spatial()
-            .get_transform(&input_spatial)
-            .await?
-            .translation
-            .map(Vec3A::from)
-            .unwrap_or_default()
-            .length();
-        _ = target.set_local_transform(Transform::from_translation(Vec3::NEG_Z * len));
-        Ok(Self {
-            selection,
-            target,
-            input: input_spatial,
-        })
-    }
-    pub async fn update(&mut self) {
-        let sel = self.selection.spatial();
-        let sel_transform = sel.get_transform(&self.input).await.unwrap();
-        let target_transform = self.target.get_transform(&self.input).await.unwrap();
-        let sel_translation = sel_transform
-            .translation
-            .map(Vec3A::from)
-            .unwrap_or_default();
-        let sel_rotation = sel_transform.rotation.map(Quat::from).unwrap_or_default();
-        let target_translation = target_transform
-            .translation
-            .map(Vec3A::from)
-            .unwrap_or_default();
-        let target_rotation = target_transform
-            .rotation
-            .map(Quat::from)
-            .unwrap_or_default();
-        let lerp_factor = 0.95;
-        let sel_len = sel_translation.length();
-        let target_len = target_translation.length();
-        let sel_quat = Quat::from_rotation_arc(Vec3::NEG_Z, sel_translation.normalize().into());
-        let target_quat =
-            Quat::from_rotation_arc(Vec3::NEG_Z, target_translation.normalize().into());
-        let quat = target_quat.slerp(sel_quat, lerp_factor);
-        let len = target_len.lerp(sel_len, lerp_factor);
-        let translation = (quat * Vec3::NEG_Z) * len;
-        let rotation = target_rotation.slerp(sel_rotation, lerp_factor);
-        sel.set_relative_transform(
-            &self.input,
-            Transform::from_translation_rotation_scale(translation, rotation, Vec3::ONE),
-        )
-        .unwrap();
-    }
+	pub async fn new(
+		selection: CapturedSelection,
+		spatial_interface: SpatialInterface,
+		input: SpatialRef,
+	) -> Self {
+		let distance = spatial_interface
+			.get_relative_transform(input.clone(), selection.spatial().clone())
+			.await
+			.ok()
+			.and_then(|t| t.ok())
+			.map(|t| Vec3::from(t.translation).length())
+			.unwrap_or_default();
+		Mover {
+			selection,
+			spatial_interface,
+			input,
+			distance,
+		}
+	}
+	pub async fn update(&mut self) {
+		let Ok(Ok(transform)) = self
+			.spatial_interface
+			.get_relative_transform(self.input.clone(), self.selection.spatial().clone())
+			.await
+		else {
+			return;
+		};
+		let sel_translation = Vec3::from(transform.translation);
+		let sel_rotation = Quat::from(transform.rotation);
+		let lerp_factor = 0.95;
+		// the hold point sits straight down -Z at a fixed distance, so lerping away from it
+		// is what pulls the thing in over several frames instead of snapping
+		let quat = Quat::IDENTITY.slerp(
+			Quat::from_rotation_arc(Vec3::NEG_Z, sel_translation.normalize()),
+			lerp_factor,
+		);
+		let len = self.distance.lerp(sel_translation.length(), lerp_factor);
+		_ = self.selection.poseable().set_relative_pose(
+			self.input.clone(),
+			Posef {
+				position: ((quat * Vec3::NEG_Z) * len).into(),
+				orientation: Quat::IDENTITY.slerp(sel_rotation, lerp_factor).into(),
+			},
+		);
+	}
 }
