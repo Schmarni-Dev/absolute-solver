@@ -161,12 +161,12 @@ async fn main() {
 					.map(|point| point.distance(position))
 					.reduce(|a, b| if a > b { a } else { b })
 					.unwrap_or_default();
-				let palm = Vec3::from(hand.palm.pose.position);
 				(
 					position,
 					rotation,
 					max_distance_from_center * 2.0,
-					(position - palm).normalize(),
+					(Quat::from(hand.palm.pose.orientation))
+						* (Vec3::NEG_Z + Vec3::NEG_Y).normalize(),
 				)
 			}
 		};
@@ -186,22 +186,6 @@ async fn main() {
 			],
 			cyclic: false,
 		});
-		lines_data.push(Line {
-			points: vec![
-				LinePoint {
-					point: triangle_center.into(),
-					thickness: 0.001,
-					color: rgba_linear!(0.0, 0.0, 1.0, 1.0),
-				},
-				LinePoint {
-					point: (triangle_center + (selection_dir * 0.01)).into(),
-					thickness: 0.001,
-					color: rgba_linear!(0.0, 0.0, 1.0, 1.0),
-				},
-			],
-			cyclic: false,
-		});
-		lines.set_lines(lines_data).unwrap();
 
 		_ = input_spatial.set_local_transform(PartialTransform::from_translation_rotation(
 			triangle_center,
@@ -248,7 +232,24 @@ async fn main() {
 			selector
 				.update_selection(triangle_center, selection_dir)
 				.await;
+			lines_data.push(Line {
+				points: vec![
+					LinePoint {
+						point: triangle_center.into(),
+						thickness: 0.001,
+						color: rgba_linear!(0.0, 0.5, 1.0, 1.0),
+					},
+					LinePoint {
+						point: (triangle_center + (selection_dir)).into(),
+						thickness: 0.001,
+						color: rgba_linear!(0.0, 0.5, 1.0, 1.0),
+					},
+				],
+				cyclic: false,
+			});
 		}
+
+		lines.set_lines(lines_data).unwrap();
 	}
 }
 
