@@ -1,5 +1,5 @@
 use core::f32;
-use std::{f32::consts::FRAC_PI_2, sync::Mutex};
+use std::f32::consts::FRAC_PI_2;
 
 use glam::{Quat, Vec3};
 use gluon::{Interface, Liveness, Node};
@@ -10,14 +10,22 @@ use stardust_xr_fusion::{
 	drawable::{Lines, LinesExt},
 	fields::{FieldRef, RayMarchResult},
 	query::{InterfaceDependency, QueriedInterface, QueryableId},
-	spatial::{PartialTransform, Spatial, SpatialExt, SpatialInterface, SpatialRef, Transform},
+	spatial::{
+		BoundingBox, PartialTransform, Spatial, SpatialExt, SpatialInterface, SpatialRef, Transform,
+	},
 	spatial_query::{BeamQuery, BeamQueryHandle, BeamQueryHandlerHandler},
 };
 use stardust_xr_molecules::{
 	lines::{LineExt, bounding_box},
 	transformable::protocol::Poseable,
 };
+use tokio::sync::Mutex;
 use tracing::warn;
+
+/// max length one side of a bounding box may have before being filtered, in meters.
+const MAX_BB_LENGTH: f32 = 1.0;
+/// how many axes in a bounding box may be longer than the max before the object is being filtered.
+const MAX_TOO_LONG_AXES: u8 = 1;
 
 pub struct Selector {
 	beams: Node<Beams>,
@@ -40,7 +48,12 @@ impl Selector {
 		let (lines_spatial, lines_spatial_ref) =
 			Spatial::new(client, client.root(), Transform::IDENTITY).await?;
 		let selection_lines = Lines::new(client, &lines_spatial, Vec::new()).await?;
-		let (beams, beams_ref) = Beams::default().to_node()?;
+		let (beams, beams_ref) = Beams {
+			map: Default::default(),
+			interface: client.spatial_interface().clone(),
+			ref_space: reference_space.clone(),
+		}
+		.to_node()?;
 		let query = client
 			.spatial_query_interface()
 			.beam_query(BeamQuery {
@@ -70,7 +83,7 @@ impl Selector {
 	}
 	pub async fn update_selection(&mut self, origin: Vec3, direction: Vec3) {
 		_ = self.query.update(origin.into(), direction.into(), f32::MAX);
-		self.selection = self.beams.closest();
+		self.selection = self.beams.closest().await;
 		let Some(selection) = self.selection.clone() else {
 			_ = self.selection_lines.set_lines(Vec::new());
 			return;
@@ -154,20 +167,33 @@ impl Drop for CapturedSelection {
 	}
 }
 
-#[derive(Default, gluon::Handler)]
-struct Beams(Mutex<FxHashMap<QueryableId, Hit>>);
+#[derive(gluon::Handler)]
+struct Beams {
+	map: Mutex<FxHashMap<QueryableId, Hit>>,
+	interface: SpatialInterface,
+	ref_space: SpatialRef,
+}
 struct Hit {
 	selection: Selection,
+	bounding_box: BoundingBox,
 	min_distance: f32,
 	depth: f32,
 }
+fn count_too_long_axes(vec: impl Into<Vec3>) -> u8 {
+	vec.into()
+		.to_array()
+		.map(|v| if v > MAX_BB_LENGTH { 1 } else { 0 })
+		.into_iter()
+		.sum()
+}
 impl Beams {
-	fn closest(&self) -> Option<Selection> {
-		self.0
+	async fn closest(&self) -> Option<Selection> {
+		self.map
 			.lock()
-			.unwrap()
+			.await
 			.values()
 			.filter(|hit| hit.min_distance <= 0.0)
+			.filter(|hit| count_too_long_axes(hit.bounding_box.extents) < MAX_TOO_LONG_AXES)
 			.reduce(|a, b| if a.depth < b.depth { a } else { b })
 			.map(|hit| hit.selection.clone())
 	}
@@ -191,12 +217,20 @@ impl BeamQueryHandlerHandler for Beams {
 		let Some(poseable) = Self::poseable(interfaces) else {
 			return;
 		};
-		self.0.lock().unwrap().insert(
+		let Ok(Ok(bb)) = self
+			.interface
+			.get_relative_bounding_box(self.ref_space.clone(), spatial.clone())
+			.await
+		else {
+			return;
+		};
+		self.map.lock().await.insert(
 			obj,
 			Hit {
 				selection: Selection { spatial, poseable },
 				min_distance: spatial_info.min_distance,
 				depth: spatial_info.deepest_point_distance,
+				bounding_box: bb,
 			},
 		);
 	}
@@ -207,7 +241,7 @@ impl BeamQueryHandlerHandler for Beams {
 		obj: QueryableId,
 		interfaces: Vec<QueriedInterface>,
 	) {
-		let mut hits = self.0.lock().unwrap();
+		let mut hits = self.map.lock().await;
 		match Self::poseable(interfaces) {
 			Some(poseable) => {
 				if let Some(hit) = hits.get_mut(&obj) {
@@ -221,14 +255,22 @@ impl BeamQueryHandlerHandler for Beams {
 	}
 
 	async fn moved(&self, _ctx: gluon::Context, obj: QueryableId, spatial_info: RayMarchResult) {
-		if let Some(hit) = self.0.lock().unwrap().get_mut(&obj) {
+		if let Some(hit) = self.map.lock().await.get_mut(&obj) {
 			hit.min_distance = spatial_info.min_distance;
 			hit.depth = spatial_info.deepest_point_distance;
+			let Ok(Ok(bb)) = self
+				.interface
+				.get_relative_bounding_box(self.ref_space.clone(), hit.selection.spatial.clone())
+				.await
+			else {
+				return;
+			};
+			hit.bounding_box = bb;
 		}
 	}
 
 	async fn left(&self, _ctx: gluon::Context, obj: QueryableId) {
-		self.0.lock().unwrap().remove(&obj);
+		self.map.lock().await.remove(&obj);
 	}
 }
 
