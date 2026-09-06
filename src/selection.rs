@@ -2,7 +2,7 @@ use core::f32;
 use std::{f32::consts::FRAC_PI_2, sync::Mutex};
 
 use glam::{Quat, Vec3};
-use gluon::{Interface, Node, RefExt};
+use gluon::{Interface, Liveness, Node};
 use rustc_hash::FxHashMap;
 use stardust_xr_fusion::{
 	Result,
@@ -11,7 +11,7 @@ use stardust_xr_fusion::{
 	fields::{FieldRef, RayMarchResult},
 	query::{InterfaceDependency, QueriedInterface, QueryableId},
 	spatial::{PartialTransform, Spatial, SpatialExt, SpatialInterface, SpatialRef, Transform},
-	spatial_query::{BeamQuery, BeamQueryHandle, BeamQueryHandler, BeamQueryHandlerHandler},
+	spatial_query::{BeamQuery, BeamQueryHandle, BeamQueryHandlerHandler},
 };
 use stardust_xr_molecules::{
 	lines::{LineExt, bounding_box},
@@ -140,6 +140,9 @@ impl CapturedSelection {
 	}
 	pub fn poseable(&self) -> &Poseable {
 		&self.selection.poseable
+	}
+	pub fn dead(&self) -> bool {
+		!self.selection.poseable.alive()
 	}
 }
 impl Drop for CapturedSelection {

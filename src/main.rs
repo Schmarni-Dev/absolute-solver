@@ -208,6 +208,9 @@ async fn main() {
 				None => None,
 			};
 		}
+		if captured_selection.as_ref().is_some_and(|v| v.dead()) {
+			captured_selection.take();
+		}
 		// we can use this solver active with containing input to get when we start and stop expanding our fingers to be able to switch between selection and levitation
 		if solver_active.currently_acting().contains(&input) {
 			if let Some(sel) = captured_selection.as_mut() {

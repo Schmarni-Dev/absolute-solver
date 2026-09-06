@@ -59,4 +59,7 @@ impl Mover {
 			},
 		);
 	}
+	pub fn dead(&self) -> bool {
+		self.selection.dead()
+	}
 }
