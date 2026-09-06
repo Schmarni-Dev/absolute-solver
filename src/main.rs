@@ -18,7 +18,11 @@ use stardust_xr_molecules::{accent_color::AccentColor, input_action::SimpleActio
 use tokio::sync::broadcast::error::RecvError;
 use zbus::Connection;
 
-use crate::{mover::Mover, ring::Ring, selection::Selector};
+use crate::{
+	mover::Mover,
+	ring::{GRAB_RADIUS, Ring},
+	selection::Selector,
+};
 
 pub const APP_ID: &str = "absolute_solver";
 
@@ -99,14 +103,14 @@ async fn main() {
 		};
 		ring.update(&frame_info);
 
-		let Some(input) = ring.get_attached_input() else {
+		let Some(input) = ring.driving_input() else {
 			_ = lines.set_lines(Vec::new());
 			_ = solver_spatial.set_local_transform(PartialTransform::from_scale(Vec3::ZERO));
 			_ = captured_selection.take();
 			continue;
 		};
 		solver_active.update(&ring.input, &|data| match data.input() {
-			InputDataType::Pointer { .. } => false,
+			InputDataType::Pointer { .. } => data.datamap_f32("select") > 0.5,
 			InputDataType::Hand { data: hand } => {
 				let distance = Vec3::from(hand.thumb.tip.pose.position)
 					.distance(hand.index.tip.pose.position.into())
@@ -119,6 +123,10 @@ async fn main() {
 
 		let mut lines_data = Vec::new();
 		let (triangle_center, rotation, diameter, selection_dir) = match input.input() {
+			InputDataType::Pointer { data: pointer } => {
+				let (pos, rot) = ring.pose();
+				(pos, rot, GRAB_RADIUS * 2.0, Vec3::from(pointer.direction()))
+			}
 			InputDataType::Tip { data: tip } => (
 				tip.pose.position.into(),
 				tip.pose.orientation.into(),
@@ -160,9 +168,6 @@ async fn main() {
 					max_distance_from_center * 2.0,
 					(position - palm).normalize(),
 				)
-			}
-			_ => {
-				continue;
 			}
 		};
 		let normal = rotation * Vec3::NEG_Z;

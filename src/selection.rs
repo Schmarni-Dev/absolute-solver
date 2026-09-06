@@ -40,7 +40,7 @@ impl Selector {
 		let (lines_spatial, lines_spatial_ref) =
 			Spatial::new(client, client.root(), Transform::IDENTITY).await?;
 		let selection_lines = Lines::new(client, &lines_spatial, Vec::new()).await?;
-		let (beams, beams_ref) = BeamQueryHandler::new_node(Beams::default())?;
+		let (beams, beams_ref) = Beams::default().to_node()?;
 		let query = client
 			.spatial_query_interface()
 			.beam_query(BeamQuery {

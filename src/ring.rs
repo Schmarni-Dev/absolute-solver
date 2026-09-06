@@ -18,6 +18,8 @@ use stardust_xr_molecules::{
 	lines::{LineExt, circle},
 };
 
+pub const GRAB_RADIUS: f32 = 0.05;
+
 pub struct Ring {
 	grabbable: Grabbable,
 	derezzable: Derezzable,
@@ -32,7 +34,7 @@ impl Ring {
 	pub async fn new(client: &Client<impl ClientHandler>) -> Result<Self> {
 		let (spatial, spatial_ref) =
 			Spatial::new(client, client.root(), Transform::IDENTITY).await?;
-		let grab_radius = 0.05;
+		let grab_radius = GRAB_RADIUS;
 		let grab_thickness = 0.005;
 		// the ring is drawn and felt on the XZ plane, stood up to face -Z
 		let (ring_spatial, _) = Spatial::new(
@@ -107,6 +109,9 @@ impl Ring {
 	pub fn input_space(&self) -> &SpatialRef {
 		&self.input_space
 	}
+	pub fn pose(&self) -> (Vec3, Quat) {
+		self.grabbable.pose()
+	}
 	pub fn update(&mut self, frame_info: &FrameInfo) {
 		if self.derezzable.receiver.try_recv().is_ok() {
 			process::exit(0);
@@ -120,6 +125,7 @@ impl Ring {
 		if self.grabbable.grab_action().actor_started() && self.attached_to.is_some() {
 			self.on_detach();
 		}
+		self.center_on_pointer();
 
 		let pos = self.grabbable.pose().0.into();
 		let attaching_to = self.get_input_to_capture(pos);
@@ -175,6 +181,25 @@ impl Ring {
 			self.grabbable.set_pose(pos, rot);
 		}
 	}
+	/// the grabbable keeps the lateral offset you grabbed at, but a held ring should have the ray through its center
+	fn center_on_pointer(&mut self) {
+		let ray = self
+			.grabbable
+			.grab_action()
+			.actor()
+			.and_then(|actor| match actor.input() {
+				InputDataType::Pointer { data } => {
+					Some((Vec3::from(data.pose.position), Vec3::from(data.direction())))
+				}
+				_ => None,
+			});
+		let Some((origin, dir)) = ray else {
+			return;
+		};
+		let (pos, rot) = self.grabbable.pose();
+		self.grabbable
+			.set_pose(origin + dir * (pos - origin).dot(dir), rot);
+	}
 	fn on_attach(&mut self, snap: &InputSnapshot) {
 		self.input.start_capture(snap);
 		self.attached_to = Some(snap.method.clone());
@@ -185,7 +210,16 @@ impl Ring {
 		}
 		self.attached_to.take();
 	}
-	pub fn get_attached_input(&self) -> Option<Arc<InputSnapshot>> {
+	/// what the ring is working off of, either what it's attached to or a pointer holding it like a tool
+	pub fn driving_input(&self) -> Option<Arc<InputSnapshot>> {
+		if let Some(actor) = self.grabbable.grab_action().actor()
+			&& matches!(actor.input(), InputDataType::Pointer { .. })
+		{
+			return Some(actor.clone());
+		}
+		self.get_attached_input()
+	}
+	fn get_attached_input(&self) -> Option<Arc<InputSnapshot>> {
 		let attached = self.attached_to.as_ref()?;
 		self.input.input().get(attached).cloned()
 	}
