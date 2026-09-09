@@ -24,12 +24,12 @@ use crate::{
 	selection::Selector,
 };
 
-pub const APP_ID: &str = "absolute_solver";
+pub const APP_ID: &str = "dev.schmarni.AbsoluteSolver";
 
 #[tokio::main]
 async fn main() {
 	tracing_subscriber::fmt().init();
-	let (client, root) = Client::connect(&[&project_local_resources!("res")])
+	let (client, root) = Client::connect(&[&project_local_resources!("data")])
 		.await
 		.unwrap();
 	let mut accent_color = AccentColor::new(Connection::session().await.unwrap());
