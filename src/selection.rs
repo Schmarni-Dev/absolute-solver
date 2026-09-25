@@ -2,7 +2,7 @@ use core::f32;
 use std::f32::consts::FRAC_PI_2;
 
 use glam::{Quat, Vec3};
-use gluon::{Interface, Liveness, Node};
+use gluon_ipc::{Interface, Liveness, Node};
 use rustc_hash::FxHashMap;
 use stardust_xr_fusion::{
 	Result,
@@ -66,6 +66,7 @@ impl Selector {
 				origin: [0.0; 3].into(),
 				direction: Vec3::NEG_Z.into(),
 				max_length: f32::MAX,
+				margin: 0.01,
 			})
 			.await??;
 
@@ -82,7 +83,7 @@ impl Selector {
 		})
 	}
 	pub async fn update_selection(&mut self, origin: Vec3, direction: Vec3) {
-		_ = self.query.update(origin.into(), direction.into(), f32::MAX);
+		_ = self.query.update(origin.into(), direction.into(), f32::MAX, 0.005);
 		self.selection = self.beams.closest().await;
 		let Some(selection) = self.selection.clone() else {
 			_ = self.selection_lines.set_lines(Vec::new());
@@ -167,7 +168,7 @@ impl Drop for CapturedSelection {
 	}
 }
 
-#[derive(gluon::Handler)]
+#[derive(gluon_ipc::Handler)]
 struct Beams {
 	map: Mutex<FxHashMap<QueryableId, Hit>>,
 	interface: SpatialInterface,
@@ -207,7 +208,7 @@ impl Beams {
 impl BeamQueryHandlerHandler for Beams {
 	async fn intersected(
 		&self,
-		_ctx: gluon::Context,
+		_ctx: gluon_ipc::Context,
 		obj: QueryableId,
 		_field: FieldRef,
 		spatial: SpatialRef,
@@ -237,7 +238,7 @@ impl BeamQueryHandlerHandler for Beams {
 
 	async fn interfaces_changed(
 		&self,
-		_ctx: gluon::Context,
+		_ctx: gluon_ipc::Context,
 		obj: QueryableId,
 		interfaces: Vec<QueriedInterface>,
 	) {
@@ -254,7 +255,7 @@ impl BeamQueryHandlerHandler for Beams {
 		}
 	}
 
-	async fn moved(&self, _ctx: gluon::Context, obj: QueryableId, spatial_info: RayMarchResult) {
+	async fn moved(&self, _ctx: gluon_ipc::Context, obj: QueryableId, spatial_info: RayMarchResult) {
 		if let Some(hit) = self.map.lock().await.get_mut(&obj) {
 			hit.min_distance = spatial_info.min_distance;
 			hit.depth = spatial_info.deepest_point_distance;
@@ -269,7 +270,7 @@ impl BeamQueryHandlerHandler for Beams {
 		}
 	}
 
-	async fn left(&self, _ctx: gluon::Context, obj: QueryableId) {
+	async fn left(&self, _ctx: gluon_ipc::Context, obj: QueryableId) {
 		self.map.lock().await.remove(&obj);
 	}
 }

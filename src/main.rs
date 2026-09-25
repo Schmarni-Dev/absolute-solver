@@ -5,7 +5,7 @@ pub mod selection;
 use std::f32::consts::FRAC_PI_2;
 
 use glam::{Quat, Vec3};
-use gluon::Liveness;
+use gluon_ipc::Liveness;
 use stardust_xr_fusion::{
 	client::Client,
 	drawable::{Line, LinePoint, Lines, LinesExt, MaterialParameter, Model, ModelExt},
