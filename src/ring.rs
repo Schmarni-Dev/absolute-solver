@@ -62,6 +62,8 @@ impl Ring {
 				linear_momentum: None,
 				angular_momentum: None,
 				pointer_mode: PointerMode::Align,
+				containable: true,
+				poseable: true,
 			},
 		)
 		.await?;

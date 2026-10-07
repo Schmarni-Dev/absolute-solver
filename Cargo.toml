@@ -12,14 +12,14 @@ tracing-subscriber = "0.3.20"
 zbus = { version = "5.11.0", features = ["tokio"] }
 
 [dependencies.gluon-ipc]
-version = "0.1.0"
+version = "0.1.1"
 # git = "https://github.com/technobaboo/gluon.git"
 
 [dependencies.stardust-xr-fusion]
-version = "0.52.0"
+version = "0.53.0-rc.1"
 # git = "https://github.com/StardustXR/core.git"
 
 [dependencies.stardust-xr-molecules]
-version = "0.52.0"
+version = "0.53.0-rc.1"
 # git = "https://github.com/StardustXR/molecules.git"
 # path = "../molecules"
