@@ -1,5 +1,5 @@
 name := 'absolute-solver'
-export APPID := 'dev.schmarni.AbsoulteSolver'
+export APPID := 'dev.schmarni.AbsoluteSolver'
 
 # Use mold linker if clang and mold exists.
 
